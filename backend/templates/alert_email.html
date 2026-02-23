@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<body style="margin: 0; padding: 0; font-family: 'Inter', Arial, sans-serif; background: #0F0F1A;">
+<div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <div style="background: #1A1A2E; border-radius: 12px; border: 1px solid rgba(124, 58, 237, 0.3); padding: 30px; box-shadow: 0 4px 30px rgba(124, 58, 237, 0.1);">
+
+        <!-- Header -->
+        <div style="text-align: center; margin-bottom: 24px;">
+            <h1 style="color: #A855F7; margin: 0; font-size: 24px;">🛡️ AbuseCVE Alert (≖_≖ )</h1>
+        </div>
+
+        <!-- Severity Badge -->
+        {% set severity_colors = {"CRITICAL": "#FF4444", "HIGH": "#FF8C00", "MEDIUM": "#FFD700", "LOW": "#00CED1"} %}
+        <div style="text-align: center; margin-bottom: 20px;">
+            <span style="display: inline-block; background: {{ severity_colors.get(cve.severity, '#888') }};
+                         color: #fff; padding: 6px 16px; border-radius: 8px; font-weight: bold;
+                         font-size: 14px; letter-spacing: 1px;">
+                {{ cve.severity or 'UNKNOWN' }}
+            </span>
+            {% if cve.kev_flag %}
+            <span style="display: inline-block; background: #FF4444; color: #fff; padding: 6px 12px;
+                         border-radius: 8px; font-weight: bold; font-size: 12px; margin-left: 8px;">
+                ⚠️ KEV
+            </span>
+            {% endif %}
+        </div>
+
+        <!-- CVE ID -->
+        <h2 style="color: #FFFFFF; margin: 0 0 16px 0; font-size: 22px; text-align: center;">
+            {{ cve.cve_id }}
+        </h2>
+
+        <!-- Details -->
+        <div style="background: rgba(124, 58, 237, 0.08); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+            <table style="width: 100%; color: #E0E0E0; font-size: 14px;">
+                <tr>
+                    <td style="padding: 4px 0; color: #A855F7; font-weight: bold;">Vendor</td>
+                    <td style="padding: 4px 0;">{{ cve.vendor or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 4px 0; color: #A855F7; font-weight: bold;">Product</td>
+                    <td style="padding: 4px 0;">{{ cve.product or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 4px 0; color: #A855F7; font-weight: bold;">CVSS Score</td>
+                    <td style="padding: 4px 0;">{{ cve.cvss_score or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 4px 0; color: #A855F7; font-weight: bold;">Source</td>
+                    <td style="padding: 4px 0;">{{ cve.source or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 4px 0; color: #A855F7; font-weight: bold;">Published</td>
+                    <td style="padding: 4px 0;">{{ cve.published_date or 'N/A' }}</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Description -->
+        <div style="color: #CCCCCC; font-size: 14px; line-height: 1.6; margin-bottom: 16px;">
+            {{ cve.description or 'No description available.' }}
+        </div>
+
+        {% if rule_name %}
+        <div style="color: #888; font-size: 12px; margin-bottom: 12px;">
+            <strong>Matched Rule:</strong> {{ rule_name }}
+        </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div style="border-top: 1px solid rgba(124, 58, 237, 0.2); padding-top: 16px; margin-top: 16px;">
+            <p style="color: #666; font-size: 11px; text-align: center; margin: 0;">
+                AbuseCVE (≖_≖ ) • {{ timestamp }} • <a href="https://nvd.nist.gov/vuln/detail/{{ cve.cve_id }}" style="color: #7C3AED;">View on NVD</a>
+            </p>
+        </div>
+    </div>
+</div>
+</body>
+</html>

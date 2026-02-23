@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+
+<body style="margin: 0; padding: 0; font-family: 'Inter', Arial, sans-serif; background: #0F0F1A;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <div
+            style="background: #1A1A2E; border-radius: 12px; border: 1px solid rgba(124, 58, 237, 0.3); padding: 30px;">
+            <h1 style="color: #A855F7; margin: 0 0 24px 0; text-align: center;">🔒 AbuseCVE Health Report (≖_≖ )</h1>
+
+            <!-- Component Status -->
+            <h3 style="color: #7C3AED; margin: 0 0 12px 0;">Component Status</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+                <tr>
+                    <th
+                        style="text-align: left; padding: 8px; color: #A855F7; border-bottom: 1px solid #333; font-size: 13px;">
+                        Component</th>
+                    <th
+                        style="text-align: left; padding: 8px; color: #A855F7; border-bottom: 1px solid #333; font-size: 13px;">
+                        Status</th>
+                </tr>
+                {% for component, status in report.components_status.items() %}
+                <tr>
+                    <td style="padding: 8px; color: #E0E0E0; font-size: 14px; border-bottom: 1px solid #222;">{{
+                        component }}</td>
+                    <td
+                        style="padding: 8px; font-size: 14px; border-bottom: 1px solid #222;
+                    color: {{ '#4ADE80' if status == 'ok' or status == 'configured' or status == 'key_configured' else '#FF4444' }}; font-weight: bold;">
+                        {{ status }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+
+            <!-- Stats -->
+            <div style="background: rgba(124, 58, 237, 0.08); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+                <h3 style="color: #7C3AED; margin: 0 0 12px 0;">Today's Summary</h3>
+                <table style="width: 100%; color: #E0E0E0; font-size: 14px;">
+                    <tr>
+                        <td style="padding: 4px 0;">🆕 New CVEs Alerted</td>
+                        <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.new_cves_alerted }}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 0;">📋 Already Existing CVEs Seen</td>
+                        <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.existing_cves_seen
+                            }}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 0;">🗄️ Total CVEs in Database</td>
+                        <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.total_cves_in_db }}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 4px 0;">🔍 Active Filter Rules</td>
+                        <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.active_filters }}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            {% if report.errors %}
+            <div
+                style="background: rgba(255, 68, 68, 0.1); border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid rgba(255, 68, 68, 0.3);">
+                <h3 style="color: #FF4444; margin: 0 0 8px 0;">⚠️ Errors</h3>
+                {% for error in report.errors %}
+                <p style="color: #E0E0E0; font-size: 13px; margin: 4px 0;">{{ error.cve_id }}: {{ error.error }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div style="border-top: 1px solid rgba(124, 58, 237, 0.2); padding-top: 16px; margin-top: 16px;">
+                <p style="color: #666; font-size: 11px; text-align: center; margin: 0;">
+                    AbuseCVE (≖_≖ ) • {{ timestamp }}
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

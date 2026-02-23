@@ -1,0 +1,31 @@
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+psycopg2-binary==2.9.10
+
+# Celery
+celery[redis]==5.4.0
+redis==5.2.1
+
+# HTTP
+httpx==0.28.1
+aiohttp==3.11.11
+
+# Email
+aiosmtplib==3.0.2
+jinja2==3.1.5
+
+# Config
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Utils
+python-dateutil==2.9.0
+markdown==3.7

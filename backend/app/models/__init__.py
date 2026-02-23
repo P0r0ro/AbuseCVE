@@ -1,0 +1,1 @@
+"""AbuseCVE models package."""
