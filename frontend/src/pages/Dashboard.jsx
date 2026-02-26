@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus } from '../api';
 
 const severityColors = {
@@ -16,12 +16,34 @@ const sourceColors = {
     REDHAT: '#DC2626',
 };
 
+const TASK_STORAGE_KEY = 'abusecve_active_task';
+
+function getStoredTask() {
+    try {
+        const raw = localStorage.getItem(TASK_STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch { }
+    return null;
+}
+
+function storeTask(task) {
+    if (task) {
+        localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(task));
+    } else {
+        localStorage.removeItem(TASK_STORAGE_KEY);
+    }
+}
+
 export default function Dashboard() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [scanStatus, setScanStatus] = useState('');
-    const [initMode, setInitMode] = useState('api'); // 'api' or 'local'
+    const [initMode, setInitMode] = useState('api');
     const [mitreDir, setMitreDir] = useState('');
+
+    // Persistent task tracking
+    const [activeTask, setActiveTask] = useState(getStoredTask);
+    const pollRef = useRef(null);
 
     const fetchData = async () => {
         try {
@@ -36,29 +58,147 @@ export default function Dashboard() {
 
     useEffect(() => { fetchData(); }, []);
 
+    // Poll task status — persists across tab switches
+    const pollTask = useCallback(async () => {
+        const task = getStoredTask();
+        if (!task) return;
+
+        try {
+            const result = await getTaskStatus(task.taskId);
+            const newTask = {
+                ...task,
+                status: result.status,
+                result: result.result,
+                lastChecked: new Date().toISOString(),
+            };
+
+            if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(result.status)) {
+                // Task finished
+                newTask.finished = true;
+                newTask.finishedAt = new Date().toISOString();
+                storeTask(null); // Clear from storage
+                setActiveTask(newTask);
+
+                // Refresh dashboard data
+                fetchData();
+
+                // Format result for display
+                const formatResult = (r) => {
+                    if (!r) return 'Unknown error';
+                    if (typeof r === 'string') return r;
+                    if (r.detail) return r.detail;
+                    if (r.message) return r.message;
+                    if (r.error) return r.error;
+                    try { return JSON.stringify(r, null, 2); } catch { return String(r); }
+                };
+
+                if (result.status === 'SUCCESS') {
+                    setScanStatus(`✅ ${task.label} completed successfully!`);
+                } else {
+                    setScanStatus(`❌ ${task.label} failed: ${formatResult(result.result)}`);
+                }
+            } else {
+                storeTask(newTask);
+                setActiveTask(newTask);
+            }
+        } catch (e) {
+            console.error('Task poll error:', e);
+        }
+    }, []);
+
+    // Start polling on mount and when activeTask changes
+    useEffect(() => {
+        if (pollRef.current) clearInterval(pollRef.current);
+
+        const stored = getStoredTask();
+        if (stored && !stored.finished) {
+            // Poll every 5 seconds
+            pollTask(); // Immediate check
+            pollRef.current = setInterval(pollTask, 5000);
+        }
+
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+        };
+    }, [pollTask]);
+
+    const startTask = (taskId, label) => {
+        const task = {
+            taskId,
+            label,
+            status: 'PENDING',
+            startedAt: new Date().toISOString(),
+            finished: false,
+        };
+        storeTask(task);
+        setActiveTask(task);
+
+        // Start polling
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(pollTask, 5000);
+    };
+
     const handleScan = async () => {
         setScanStatus('Triggering scan...');
         try {
             const result = await triggerScan();
-            setScanStatus(`Scan started (Task: ${result.task_id})`);
+            startTask(result.task_id, 'CVE Scan');
+            setScanStatus('');
         } catch (e) {
             setScanStatus(`Error: ${e.message}`);
         }
     };
 
     const handleInitDB = async () => {
-        setScanStatus('Initializing database (full mirror from all sources)...');
+        setScanStatus('');
         try {
             if (initMode === 'local' && mitreDir) {
                 const result = await initializeDBLocal(mitreDir);
-                setScanStatus(`Local DB init started: ${result.message}`);
+                startTask(result.task_id, 'Local DB Init');
             } else {
                 const result = await initializeDB();
-                setScanStatus(`DB init started: ${result.message}`);
+                startTask(result.task_id, 'Full DB Init (API)');
             }
         } catch (e) {
             setScanStatus(`Error: ${e.message}`);
         }
+    };
+
+    const dismissTask = () => {
+        storeTask(null);
+        setActiveTask(null);
+        if (pollRef.current) clearInterval(pollRef.current);
+    };
+
+    const getTaskProgress = () => {
+        if (!activeTask) return null;
+        const s = activeTask.status;
+        if (s === 'SUCCESS') return 100;
+        if (s === 'FAILURE' || s === 'REVOKED') return 100;
+        if (s === 'STARTED' || s === 'PROGRESS') return 50;
+        if (s === 'PENDING') return 10;
+        return 30;
+    };
+
+    const getTaskColor = () => {
+        if (!activeTask) return 'var(--purple-400)';
+        if (activeTask.status === 'SUCCESS') return 'var(--success)';
+        if (activeTask.status === 'FAILURE') return 'var(--error)';
+        return 'var(--purple-400)';
+    };
+
+    const getElapsedTime = () => {
+        if (!activeTask?.startedAt) return '';
+        const start = new Date(activeTask.startedAt);
+        const now = activeTask.finishedAt ? new Date(activeTask.finishedAt) : new Date();
+        const diff = Math.floor((now - start) / 1000);
+        const mins = Math.floor(diff / 60);
+        const secs = diff % 60;
+        if (mins > 60) {
+            const hrs = Math.floor(mins / 60);
+            return `${hrs}h ${mins % 60}m`;
+        }
+        return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
     };
 
     if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading dashboard...</div></div>;
@@ -66,6 +206,7 @@ export default function Dashboard() {
     const sev = data?.severity_distribution || {};
     const maxSev = Math.max(...Object.values(sev), 1);
     const sourceDist = data?.source_distribution || {};
+    const taskProgress = getTaskProgress();
 
     return (
         <div className="main-content animate-in">
@@ -75,14 +216,86 @@ export default function Dashboard() {
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>Real-time CVE monitoring overview — 4 sources active</p>
                 </div>
                 <div className="header-actions">
-                    <button className="btn btn-primary" onClick={handleScan}>🔍 Trigger Scan</button>
+                    <button className="btn btn-primary" onClick={handleScan}
+                        disabled={activeTask && !activeTask.finished}>🔍 Trigger Scan</button>
                     <button className="btn btn-secondary" onClick={fetchData}>↻ Refresh</button>
                 </div>
             </div>
 
             {scanStatus && (
-                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: 'var(--border-accent)' }}>
+                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: scanStatus.includes('✅') ? 'var(--success)' : scanStatus.includes('❌') ? 'var(--error)' : 'var(--border-accent)' }}>
                     <span className="text-sm">{scanStatus}</span>
+                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                        onClick={() => setScanStatus('')}>✕</button>
+                </div>
+            )}
+
+            {/* Active Task Progress Bar */}
+            {activeTask && (
+                <div className="card mb-20" style={{
+                    padding: '16px 20px',
+                    borderColor: getTaskColor(),
+                    borderWidth: 1,
+                    position: 'relative',
+                    overflow: 'hidden',
+                }}>
+                    {/* Animated background progress */}
+                    {!activeTask.finished && (
+                        <div style={{
+                            position: 'absolute', top: 0, left: 0, bottom: 0,
+                            width: `${taskProgress}%`,
+                            background: `linear-gradient(90deg, ${getTaskColor()}15, ${getTaskColor()}08)`,
+                            transition: 'width 1s ease',
+                        }} />
+                    )}
+                    <div style={{ position: 'relative', zIndex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                {!activeTask.finished && (
+                                    <div className="loading-spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+                                )}
+                                <span style={{ fontWeight: 600, color: getTaskColor() }}>
+                                    {activeTask.finished
+                                        ? (activeTask.status === 'SUCCESS' ? '✅' : '❌')
+                                        : '⏳'} {activeTask.label}
+                                </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <span className="text-sm text-muted">⏱ {getElapsedTime()}</span>
+                                <span className="text-sm" style={{ color: getTaskColor() }}>{activeTask.status}</span>
+                                {activeTask.finished && (
+                                    <button className="text-sm" style={{
+                                        color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer'
+                                    }} onClick={dismissTask}>✕</button>
+                                )}
+                            </div>
+                        </div>
+                        {/* Progress bar */}
+                        <div style={{
+                            height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden',
+                        }}>
+                            <div style={{
+                                height: '100%', borderRadius: 2,
+                                background: getTaskColor(),
+                                width: `${taskProgress}%`,
+                                transition: 'width 1s ease',
+                                animation: !activeTask.finished ? 'pulse 2s ease-in-out infinite' : 'none',
+                            }} />
+                        </div>
+                        {!activeTask.finished && (
+                            <p className="text-xs text-muted" style={{ marginTop: 6 }}>
+                                This task runs in the background — you can navigate away safely. Progress is saved.
+                            </p>
+                        )}
+                        {activeTask.finished && activeTask.result && (
+                            <pre className="text-xs text-muted" style={{
+                                marginTop: 8, background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 6,
+                                overflow: 'auto', maxHeight: 100,
+                            }}>
+                                {typeof activeTask.result === 'string' ? activeTask.result : JSON.stringify(activeTask.result, null, 2)}
+                            </pre>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -167,7 +380,10 @@ export default function Dashboard() {
                         )}
                     </div>
 
-                    <button className="btn btn-primary" onClick={handleInitDB}>🗄️ Initialize Full Database</button>
+                    <button className="btn btn-primary" onClick={handleInitDB}
+                        disabled={activeTask && !activeTask.finished}>
+                        {activeTask && !activeTask.finished ? '⏳ Task Running...' : '🗄️ Initialize Full Database'}
+                    </button>
                 </div>
             </div>
 

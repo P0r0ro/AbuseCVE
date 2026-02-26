@@ -243,21 +243,25 @@ class NVDSource(BaseCVESource):
         logger.info(f"NVD keyword '{keyword}': {len(results)} CVEs found")
         return results
 
-    async def fetch_all(self, start_index: int = 0, page_size: int = 2000) -> List[NormalizedCVE]:
-        """Fetch ALL CVEs for initial local mirror population."""
+    async def fetch_all_batched(self, start_index: int = 0, page_size: int = 2000):
+        """Fetch ALL CVEs as an async generator, yielding one page at a time.
+
+        Yields (batch: List[NormalizedCVE], fetched: int, total: int) tuples.
+        This keeps memory usage bounded — only one page (~2000 CVEs) in RAM.
+        """
         params = {
             "resultsPerPage": min(page_size, MAX_PAGE_SIZE),
             "startIndex": start_index,
         }
 
-        results: List[NormalizedCVE] = []
         async with httpx.AsyncClient() as client:
             while True:
                 data = await self._fetch_page(client, params)
                 vulns = data.get("vulnerabilities", [])
+                batch = []
                 for vuln in vulns:
                     try:
-                        results.append(self._parse_cve(vuln))
+                        batch.append(self._parse_cve(vuln))
                     except Exception as e:
                         logger.warning(f"Failed to parse CVE: {e}")
 
@@ -265,10 +269,17 @@ class NVDSource(BaseCVESource):
                 fetched = params["startIndex"] + len(vulns)
                 logger.info(f"NVD full mirror: {fetched}/{total} CVEs fetched")
 
+                yield batch, fetched, total
+
                 if fetched >= total or not vulns:
                     break
                 params["startIndex"] = fetched
 
+    async def fetch_all(self, start_index: int = 0, page_size: int = 2000) -> List[NormalizedCVE]:
+        """Fetch ALL CVEs (non-streaming, for backwards compat)."""
+        results: List[NormalizedCVE] = []
+        async for batch, fetched, total in self.fetch_all_batched(start_index, page_size):
+            results.extend(batch)
         return results
 
     async def fetch_by_cpe(self, cpe_name: str) -> List[NormalizedCVE]:

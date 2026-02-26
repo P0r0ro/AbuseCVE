@@ -1,0 +1,65 @@
+filter_rules:
+  # ── Fortinet Critical Products ─────────────────────────
+  - name: "Fortinet Critical - EDR/Mail/Guard/Analyzer"
+    vendor: "fortinet"
+    products:
+      - "fortiedr"
+      - "fortimail"
+      - "fortiguard"
+      - "fortianalyzer"
+    enabled: true
+    min_cvss: 3.0
+    max_cvss: 10.0
+    severity_filter:
+      - "CRITICAL"
+    keywords_include:
+      - "fortiedr"
+      - "fortimail"
+      - "fortiguard"
+      - "fortianalyzer"
+    keywords_exclude: []
+    alert_on_modified: true
+    description: "Monitor Fortinet critical products (FortiEDR, FortiMail, FortiGuard, FortiAnalyzer) across all versions. CVSS 3-10, alert on modifications."
+
+  # ── Wazuh (exclude EDR plugins) ────────────────────────
+  - name: "Wazuh - All (excl. EDR Plugins)"
+    vendor: "wazuh"
+    products:
+      - "wazuh"
+    enabled: true
+    min_cvss: 3.0
+    max_cvss: 10.0
+    severity_filter:
+      - "CRITICAL"
+    keywords_include:
+      - "wazuh"
+    keywords_exclude:
+      - "edr plugin"
+      - "edr-plugin"
+      - "edr_plugin"
+    alert_on_modified: true
+    description: "Monitor all Wazuh CVEs excluding EDR plugins. CVSS 3-10, alert on modifications."
+
+  # ── Microsoft Cloud & Collaboration ────────────────────
+  - name: "Microsoft - Azure/Sentinel/Exchange/O365"
+    vendor: "microsoft"
+    products:
+      - "azure"
+      - "sentinel"
+      - "exchange"
+      - "office365"
+      - "office 365"
+    enabled: true
+    min_cvss: 3.0
+    max_cvss: 10.0
+    severity_filter:
+      - "HIGH"
+    keywords_include:
+      - "azure"
+      - "sentinel"
+      - "exchange"
+      - "office365"
+      - "office 365"
+    keywords_exclude: []
+    alert_on_modified: true
+    description: "Monitor Microsoft cloud and collaboration products (Azure, Sentinel, Exchange, Office 365). CVSS 3-10, alert on modifications."

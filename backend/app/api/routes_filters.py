@@ -305,25 +305,36 @@ async def import_filters_yaml(
     db: AsyncSession = Depends(get_db),
 ):
     """Import filter rules from a YAML or JSON file."""
-    content = await file.read()
-    content_str = content.decode("utf-8")
+    try:
+        content = await file.read()
+        content_str = content.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Failed to read uploaded file: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
+
+    logger.info(f"Import YAML: received {len(content_str)} bytes from '{file.filename}'")
 
     rules_data = None
+
     # Try YAML first
     try:
         import yaml
         data = yaml.safe_load(content_str)
-        rules_data = data.get("filter_rules", [])
+        if isinstance(data, dict):
+            rules_data = data.get("filter_rules", [])
+            logger.info(f"Parsed YAML: found {len(rules_data)} rules")
     except ImportError:
-        pass
-    except Exception:
-        pass
+        logger.warning("PyYAML not installed, falling back to JSON")
+    except Exception as e:
+        logger.warning(f"YAML parse failed: {e}, trying JSON")
 
     # Fallback to JSON
     if rules_data is None:
         try:
             data = json.loads(content_str)
-            rules_data = data.get("filter_rules", [])
+            if isinstance(data, dict):
+                rules_data = data.get("filter_rules", [])
+            logger.info(f"Parsed JSON: found {len(rules_data or [])} rules")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML/JSON file: {e}")
 
@@ -357,9 +368,16 @@ async def import_filters_yaml(
             db.add(rule)
             imported += 1
         except Exception as e:
+            logger.error(f"Rule {idx} import error: {e}", exc_info=True)
             errors.append(f"Rule {idx} ({rule_data.get('name', '?')}): {e}")
 
-    await db.flush()
+    try:
+        await db.commit()
+        logger.info(f"Import complete: {imported} rules imported, {len(errors)} errors")
+    except Exception as e:
+        logger.error(f"DB commit failed during import: {e}", exc_info=True)
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     return {
         "message": f"Imported {imported} filter rules",

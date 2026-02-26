@@ -260,59 +260,90 @@ class CVEPipeline:
     ) -> Dict[str, Any]:
         """Bulk-import ALL past CVEs from all 4 sources into the database.
 
-        Downloads everything from NVD, MITRE, CISA KEV, and RedHat.
+        Uses streaming batch processing to avoid OOM:
+        - NVD: streamed in pages of 2000, committed per page
+        - Others: fetched then batch-committed in chunks of 5000
         """
         logger.info("DB Init: Starting full bulk import from all sources")
 
-        all_cves: List[NormalizedCVE] = []
+        total_new = 0
+        total_existing = 0
+        source_stats = {}
 
-        # 1. NVD full mirror
-        try:
-            nvd_cves = await self.nvd.fetch_all()
-            all_cves.extend(nvd_cves)
-            logger.info(f"DB Init: {len(nvd_cves)} CVEs from NVD")
-        except Exception as e:
-            logger.error(f"DB Init NVD failed: {e}", exc_info=True)
-
-        # 2. CISA KEV full catalog
+        # 1. CISA KEV first (small — ~1500 entries, always fits in memory)
         try:
             kev_cves = await self.kev.fetch_all()
-            kev_ids = {c.cve_id for c in kev_cves}
-            # Mark KEV flags on existing
-            for cve in all_cves:
-                if cve.cve_id in kev_ids:
-                    cve.kev_flag = True
-            all_cves.extend(kev_cves)
-            logger.info(f"DB Init: {len(kev_cves)} CVEs from CISA KEV")
+            new, existing = await dedup_and_store(session, kev_cves)
+            await session.commit()
+            total_new += len(new)
+            total_existing += existing
+            source_stats["CISA_KEV"] = len(kev_cves)
+            logger.info(f"DB Init: {len(kev_cves)} CVEs from CISA KEV → {len(new)} new")
         except Exception as e:
             logger.error(f"DB Init CISA failed: {e}", exc_info=True)
 
-        # 3. MITRE CVEListV5
+        # 2. NVD full mirror — STREAM in batches of 2000 to avoid OOM
+        nvd_total = 0
+        try:
+            async for batch, fetched, total in self.nvd.fetch_all_batched():
+                if batch:
+                    new, existing = await dedup_and_store(session, batch)
+                    await session.commit()
+                    total_new += len(new)
+                    total_existing += existing
+                    nvd_total += len(batch)
+                    logger.info(
+                        f"DB Init NVD batch: {fetched}/{total} fetched, "
+                        f"{len(new)} new this batch, {nvd_total} total NVD"
+                    )
+            source_stats["NVD"] = nvd_total
+            logger.info(f"DB Init: {nvd_total} CVEs from NVD complete")
+        except Exception as e:
+            logger.error(f"DB Init NVD failed at {nvd_total} CVEs: {e}", exc_info=True)
+            source_stats["NVD"] = f"{nvd_total} (partial, error: {e})"
+
+        # 3. MITRE CVEListV5 — fetch then batch-commit
         try:
             mitre_cves = await self.mitre.fetch_all()
-            all_cves.extend(mitre_cves)
-            logger.info(f"DB Init: {len(mitre_cves)} CVEs from MITRE")
+            batch_size = 5000
+            mitre_new = 0
+            for i in range(0, len(mitre_cves), batch_size):
+                chunk = mitre_cves[i:i + batch_size]
+                new, existing = await dedup_and_store(session, chunk)
+                await session.commit()
+                mitre_new += len(new)
+                total_new += len(new)
+                total_existing += existing
+                logger.info(f"DB Init MITRE batch {i // batch_size + 1}: {len(new)} new")
+            del mitre_cves  # Free memory
+            source_stats["MITRE"] = mitre_new
+            logger.info(f"DB Init: MITRE complete → {mitre_new} new")
         except Exception as e:
             logger.error(f"DB Init MITRE failed: {e}", exc_info=True)
 
-        # 4. RedHat
+        # 4. RedHat — fetch then batch-commit
         try:
             redhat_cves = await self.redhat.fetch_all()
-            all_cves.extend(redhat_cves)
-            logger.info(f"DB Init: {len(redhat_cves)} CVEs from RedHat")
+            batch_size = 5000
+            redhat_new = 0
+            for i in range(0, len(redhat_cves), batch_size):
+                chunk = redhat_cves[i:i + batch_size]
+                new, existing = await dedup_and_store(session, chunk)
+                await session.commit()
+                redhat_new += len(new)
+                total_new += len(new)
+                total_existing += existing
+            del redhat_cves
+            source_stats["REDHAT"] = redhat_new
+            logger.info(f"DB Init: RedHat complete → {redhat_new} new")
         except Exception as e:
             logger.error(f"DB Init RedHat failed: {e}", exc_info=True)
 
-        # Store all (dedup handles duplicates and merging)
-        logger.info(f"DB Init: Storing {len(all_cves)} total CVEs (dedup will merge)")
-        new_cves, existing = await dedup_and_store(session, all_cves)
-        await session.commit()
-
-        logger.info(f"DB Init complete: {len(new_cves)} new, {existing} existing/merged")
+        logger.info(f"DB Init complete: {total_new} new, {total_existing} merged/existing")
         return {
-            "total_fetched": len(all_cves),
-            "new_stored": len(new_cves),
-            "already_existed": existing,
+            "total_new": total_new,
+            "already_existed": total_existing,
+            "sources": source_stats,
         }
 
     async def initialize_db_from_directory(
