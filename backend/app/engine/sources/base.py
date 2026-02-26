@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+
+
+@dataclass
+class CVSSEntry:
+    """A single CVSS score from a specific provider."""
+    provider: str = ""
+    score: Optional[float] = None
+    vector: Optional[str] = None
+    version: Optional[str] = None  # "2.0", "3.0", "3.1", "4.0"
+    severity: Optional[str] = None  # LOW, MEDIUM, HIGH, CRITICAL
 
 
 @dataclass
@@ -19,12 +29,20 @@ class NormalizedCVE:
     cvss_score: Optional[float] = None
     cvss_vector: Optional[str] = None
     source: str = "UNKNOWN"
+    sources: List[str] = field(default_factory=list)
     published_date: Optional[datetime] = None
     modified_date: Optional[datetime] = None
     kev_flag: bool = False
     cpe_names: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
     raw_json: Optional[dict] = None
+    cvss_scores: Dict[str, Any] = field(default_factory=dict)
+    weaknesses: List[str] = field(default_factory=list)  # CWE IDs
+    affected_products: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.source and self.source not in self.sources:
+            self.sources.append(self.source)
 
 
 class BaseCVESource(ABC):

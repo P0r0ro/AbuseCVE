@@ -1,4 +1,4 @@
-"""DB initialization Celery tasks – bulk import past CVEs."""
+"""DB initialization Celery tasks – bulk import ALL past CVEs."""
 
 from __future__ import annotations
 
@@ -22,16 +22,16 @@ def _run_async(coro):
     bind=True,
     name="app.tasks.init_tasks.initialize_database",
     max_retries=1,
-    soft_time_limit=3600,   # 1 hour soft limit
-    time_limit=7200,        # 2 hour hard limit
+    soft_time_limit=14400,   # 4 hour soft limit
+    time_limit=28800,        # 8 hour hard limit
 )
-def initialize_database(self, vendor_keyword: str = None):
-    """Bulk-import past CVEs for a vendor into the database.
+def initialize_database(self):
+    """Bulk-import ALL past CVEs from all sources into the database.
 
-    This can take a long time for full NVD mirror, so has extended time limits.
+    Downloads from NVD, MITRE CVEListV5, CISA KEV, and RedHat.
+    This can take a long time, so has extended time limits.
     """
-    logger.info(f"🗄️ Starting DB initialization" +
-                (f" for vendor: {vendor_keyword}" if vendor_keyword else " (full mirror)"))
+    logger.info("🗄️ Starting DB initialization (full mirror from all sources)")
 
     async def _init():
         from app.engine.pipeline import CVEPipeline
@@ -41,7 +41,7 @@ def initialize_database(self, vendor_keyword: str = None):
 
         async with async_session() as session:
             try:
-                result = await pipeline.initialize_db(session, vendor_keyword)
+                result = await pipeline.initialize_db(session)
                 logger.info(f"DB Init result: {result}")
                 return result
             except Exception as e:
@@ -55,4 +55,49 @@ def initialize_database(self, vendor_keyword: str = None):
         return result
     except Exception as exc:
         logger.error(f"❌ DB initialization failed: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.init_tasks.initialize_database_local",
+    max_retries=1,
+    soft_time_limit=7200,
+    time_limit=14400,
+)
+def initialize_database_local(self, mitre_dir: str = None, nvd_dir: str = None):
+    """Bulk-import CVEs from locally downloaded data directories.
+
+    Steps:
+    1. MITRE: git clone https://github.com/CVEProject/cvelistV5.git
+       Pass the path to the `cves/` subdirectory.
+    2. NVD: Download JSON feeds (optional)
+    3. CISA KEV + RedHat: Always fetched from API (small/fast)
+    """
+    logger.info(f"🗄️ Starting DB init from local dirs: mitre={mitre_dir}, nvd={nvd_dir}")
+
+    async def _init():
+        from app.engine.pipeline import CVEPipeline
+        from app.database import async_session
+
+        pipeline = CVEPipeline()
+
+        async with async_session() as session:
+            try:
+                result = await pipeline.initialize_db_from_directory(
+                    session, mitre_dir=mitre_dir, nvd_dir=nvd_dir
+                )
+                logger.info(f"DB Init local result: {result}")
+                return result
+            except Exception as e:
+                logger.error(f"DB Init local failed: {e}", exc_info=True)
+                await session.rollback()
+                raise
+
+    try:
+        result = _run_async(_init())
+        logger.info(f"✅ DB local initialization complete: {result}")
+        return result
+    except Exception as exc:
+        logger.error(f"❌ DB local initialization failed: {exc}")
         raise self.retry(exc=exc)

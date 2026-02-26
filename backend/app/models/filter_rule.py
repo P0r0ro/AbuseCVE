@@ -12,7 +12,7 @@ class FilterRule(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
-    vendor = Column(String(255), nullable=False, index=True)
+    vendor = Column(String(255), nullable=True, index=True)  # Made nullable for advanced mode
     products = Column(JSON, nullable=False, default=list)  # ["FortiGate", "FortiEDR", ...]
     enabled = Column(Boolean, default=True)
     min_cvss = Column(Float, nullable=True)  # minimum CVSS score to alert on
@@ -22,6 +22,8 @@ class FilterRule(Base):
     keywords_exclude = Column(JSON, nullable=True, default=list)  # keywords to EXCLUDE
     cpe_vendor = Column(String(255), nullable=True)  # CPE vendor string (e.g. "fortinet")
     description = Column(Text, nullable=True)
+    alert_on_modified = Column(Boolean, default=False)  # Alert when CVE is updated/modified
+    conditions = Column(JSON, nullable=True)  # Advanced query conditions (nested)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -39,6 +41,8 @@ class FilterRule(Base):
             "keywords_exclude": self.keywords_exclude or [],
             "cpe_vendor": self.cpe_vendor,
             "description": self.description,
+            "alert_on_modified": self.alert_on_modified,
+            "conditions": self.conditions,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

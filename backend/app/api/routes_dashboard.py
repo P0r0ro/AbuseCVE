@@ -39,6 +39,12 @@ async def dashboard_overview(db: AsyncSession = Depends(get_db)):
     )
     severity_dist = {row[0] or "UNKNOWN": row[1] for row in severity_result.all()}
 
+    # Source distribution
+    source_result = await db.execute(
+        select(CVE.source, func.count()).group_by(CVE.source)
+    )
+    source_dist = {row[0] or "UNKNOWN": row[1] for row in source_result.all()}
+
     # Recent CVEs
     recent_result = await db.execute(
         select(CVE).order_by(CVE.first_seen.desc()).limit(10)
@@ -57,24 +63,42 @@ async def dashboard_overview(db: AsyncSession = Depends(get_db)):
         "active_filters": active_filters,
         "kev_count": kev_count,
         "severity_distribution": severity_dist,
+        "source_distribution": source_dist,
         "recent_cves": recent_cves,
         "recent_alerts": recent_alerts,
     }
 
 
-class InitDBRequest(BaseModel):
-    vendor_keyword: Optional[str] = None
-
-
 @router.post("/initialize-db")
-async def initialize_database(data: InitDBRequest):
-    """Trigger bulk import of past CVEs for configured filters."""
-    from app.tasks.init_tasks import initialize_database
-    task = initialize_database.delay(vendor_keyword=data.vendor_keyword)
+async def initialize_database():
+    """Trigger full bulk import of ALL past CVEs from all sources."""
+    from app.tasks.init_tasks import initialize_database as init_db_task
+    task = init_db_task.delay()
     return {
-        "message": "Database initialization started",
+        "message": "Full database initialization started (NVD + MITRE + CISA KEV + RedHat)",
         "task_id": task.id,
-        "vendor": data.vendor_keyword or "all",
+    }
+
+
+class LocalInitRequest(BaseModel):
+    mitre_dir: Optional[str] = None
+    nvd_dir: Optional[str] = None
+
+
+@router.post("/initialize-db-local")
+async def initialize_database_local(data: LocalInitRequest):
+    """Trigger bulk import from locally downloaded data directories.
+
+    Steps for manual setup:
+    1. git clone https://github.com/CVEProject/cvelistV5.git
+    2. Pass the path to the cves/ subdirectory as mitre_dir
+    """
+    from app.tasks.init_tasks import initialize_database_local as init_local_task
+    task = init_local_task.delay(mitre_dir=data.mitre_dir, nvd_dir=data.nvd_dir)
+    return {
+        "message": "Local database initialization started",
+        "task_id": task.id,
+        "mitre_dir": data.mitre_dir,
     }
 
 

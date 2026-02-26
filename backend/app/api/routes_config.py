@@ -25,6 +25,17 @@ class ConfigUpdate(BaseModel):
     health_report_hour: Optional[int] = None
     health_report_minute: Optional[int] = None
     nvd_api_key: Optional[str] = None
+    mistral_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+
+
+def _mask_key(key: str) -> str:
+    """Mask an API key, showing last 4 chars."""
+    if not key:
+        return ""
+    if len(key) > 4:
+        return "***" + key[-4:]
+    return "***"
 
 
 @router.get("")
@@ -41,7 +52,9 @@ async def get_config():
         "scan_interval_minutes": settings.scan_interval_minutes,
         "health_report_hour": settings.health_report_hour,
         "health_report_minute": settings.health_report_minute,
-        "nvd_api_key": "***" + settings.nvd_api_key[-4:] if len(settings.nvd_api_key) > 4 else ("configured" if settings.nvd_api_key else "not_set"),
+        "nvd_api_key": _mask_key(settings.nvd_api_key),
+        "mistral_api_key": _mask_key(settings.mistral_api_key),
+        "gemini_api_key": _mask_key(settings.gemini_api_key),
         "app_env": settings.app_env,
     }
 

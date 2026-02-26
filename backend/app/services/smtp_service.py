@@ -1,8 +1,12 @@
-"""SMTP Service – sends alert emails and health reports via SMTP."""
+"""SMTP Service – sends alert emails and health reports via SMTP.
+
+Fixed: EOF errors, verbose error logging, retry with backoff.
+"""
 
 from __future__ import annotations
 
 import logging
+import traceback
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -21,6 +25,9 @@ template_env = Environment(
     autoescape=select_autoescape(["html"]),
 )
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [5, 15, 30]  # seconds
+
 
 async def send_email(
     subject: str,
@@ -28,7 +35,7 @@ async def send_email(
     recipients: Optional[List[str]] = None,
     text_body: Optional[str] = None,
 ) -> dict:
-    """Send an email via SMTP.
+    """Send an email via SMTP with retry logic.
 
     Returns:
         {"status": "sent"} or {"status": "failed", "error": "..."}
@@ -52,21 +59,93 @@ async def send_email(
         msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    try:
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.smtp_host,
-            port=settings.smtp_port,
-            username=settings.smtp_user,
-            password=settings.smtp_password,
-            use_tls=False,
-            start_tls=settings.smtp_tls,
-        )
-        logger.info(f"Email sent: '{subject}' to {recipients}")
-        return {"status": "sent"}
-    except Exception as e:
-        logger.error(f"Email send failed: {e}")
-        return {"status": "failed", "error": str(e)}
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            logger.info(
+                f"SMTP attempt {attempt + 1}/{MAX_RETRIES}: "
+                f"host={settings.smtp_host}:{settings.smtp_port}, "
+                f"tls={settings.smtp_tls}, user={settings.smtp_user}"
+            )
+
+            # Use explicit connection to avoid EOF issues
+            smtp_client = aiosmtplib.SMTP(
+                hostname=settings.smtp_host,
+                port=settings.smtp_port,
+                use_tls=False,
+                start_tls=settings.smtp_tls,
+                timeout=30,
+            )
+
+            try:
+                await smtp_client.connect()
+                logger.debug("SMTP connected successfully")
+
+                if settings.smtp_tls:
+                    try:
+                        await smtp_client.starttls()
+                        logger.debug("SMTP STARTTLS completed")
+                    except Exception as tls_err:
+                        logger.warning(f"STARTTLS failed (may already be secure): {tls_err}")
+
+                await smtp_client.login(settings.smtp_user, settings.smtp_password)
+                logger.debug("SMTP login successful")
+
+                await smtp_client.send_message(msg)
+                logger.info(f"Email sent: '{subject}' to {recipients}")
+                return {"status": "sent"}
+
+            finally:
+                try:
+                    await smtp_client.quit()
+                except Exception:
+                    # Ignore errors on quit — connection may already be closed
+                    pass
+
+        except aiosmtplib.SMTPConnectError as e:
+            last_error = f"SMTP connection failed: {e}"
+            logger.error(
+                f"SMTP connection error (attempt {attempt + 1}): {e}\n"
+                f"Host: {settings.smtp_host}:{settings.smtp_port}\n"
+                f"TLS: {settings.smtp_tls}"
+            )
+        except aiosmtplib.SMTPAuthenticationError as e:
+            last_error = f"SMTP authentication failed: {e}"
+            logger.error(f"SMTP auth error: {e}")
+            return {"status": "failed", "error": last_error}  # Don't retry auth failures
+        except aiosmtplib.SMTPResponseException as e:
+            last_error = f"SMTP response error ({e.code}): {e.message}"
+            logger.error(f"SMTP response error (attempt {attempt + 1}): code={e.code} msg={e.message}")
+        except ConnectionResetError as e:
+            last_error = f"Connection reset by server: {e}"
+            logger.error(f"SMTP connection reset (attempt {attempt + 1}): {e}")
+        except EOFError as e:
+            last_error = f"Unexpected EOF from SMTP server: {e}"
+            logger.error(
+                f"SMTP EOF error (attempt {attempt + 1}): {e}\n"
+                f"This usually means the server dropped the connection.\n"
+                f"Check: 1) Port number ({settings.smtp_port}), "
+                f"2) TLS setting ({settings.smtp_tls}), "
+                f"3) Server supports STARTTLS on this port"
+            )
+        except Exception as e:
+            last_error = f"Unexpected SMTP error: {type(e).__name__}: {e}"
+            logger.error(
+                f"SMTP unexpected error (attempt {attempt + 1}):\n"
+                f"  Type: {type(e).__name__}\n"
+                f"  Message: {e}\n"
+                f"  Traceback: {traceback.format_exc()}"
+            )
+
+        # Wait before retry with exponential backoff
+        if attempt < MAX_RETRIES - 1:
+            import asyncio
+            delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+            logger.info(f"SMTP retry in {delay}s...")
+            await asyncio.sleep(delay)
+
+    logger.error(f"SMTP failed after {MAX_RETRIES} attempts. Last error: {last_error}")
+    return {"status": "failed", "error": last_error}
 
 
 async def send_cve_alert(cve_data: dict, rule_name: str = "") -> dict:
@@ -135,6 +214,18 @@ def _fallback_alert_html(cve: dict, rule_name: str) -> str:
     }
     color = severity_colors.get(severity, "#888")
 
+    sources = ", ".join(cve.get("sources", [cve.get("source", "N/A")]))
+    cvss_scores_html = ""
+    if cve.get("cvss_scores"):
+        for provider, score_data in cve["cvss_scores"].items():
+            if isinstance(score_data, dict):
+                cvss_scores_html += (
+                    f'<div style="margin: 4px 0; padding: 6px 12px; '
+                    f'background: rgba(124,58,237,0.1); border-radius: 6px; font-size: 13px;">'
+                    f'<strong>{provider}:</strong> {score_data.get("score", "N/A")} '
+                    f'({score_data.get("version", "?")})</div>'
+                )
+
     return f"""
     <div style="font-family: 'Inter', sans-serif; background: #0F0F1A; color: #E0E0E0; padding: 40px;">
         <div style="max-width: 600px; margin: 0 auto; background: #1A1A2E; border-radius: 12px;
@@ -146,12 +237,14 @@ def _fallback_alert_html(cve: dict, rule_name: str) -> str:
             <p><strong>Vendor:</strong> {cve.get("vendor", "N/A")}</p>
             <p><strong>Product:</strong> {cve.get("product", "N/A")}</p>
             <p><strong>CVSS:</strong> {cve.get("cvss_score", "N/A")}</p>
+            <p><strong>Sources:</strong> {sources}</p>
+            {f'<div style="margin: 10px 0;"><strong>CVSS by Provider:</strong>{cvss_scores_html}</div>' if cvss_scores_html else ''}
             <hr style="border-color: rgba(124,58,237,0.2);">
             <p>{cve.get("description", "No description available.")}</p>
             {"<p><strong>Matched Rule:</strong> " + rule_name + "</p>" if rule_name else ""}
             <p><strong>KEV:</strong> {"⚠️ Yes — Known Exploited" if cve.get("kev_flag") else "No"}</p>
             <p style="color: #888; font-size: 12px; margin-top: 20px;">
-                Source: {cve.get("source", "N/A")} |
+                Source: {sources} |
                 Published: {cve.get("published_date", "N/A")}
             </p>
         </div>

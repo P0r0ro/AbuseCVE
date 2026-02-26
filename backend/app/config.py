@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     health_report_hour: int = Field(default=23)
     health_report_minute: int = Field(default=59)
 
+    # ── AI (Knowledge Article generation) ────────────
+    mistral_api_key: str = Field(default="")
+    gemini_api_key: str = Field(default="")
+
     # ── App ───────────────────────────────────────────
     secret_key: str = Field(default="change_me")
     app_env: str = Field(default="development")

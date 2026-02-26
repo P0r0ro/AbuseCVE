@@ -1,14 +1,19 @@
-"""CVE database API routes – search, browse, and detail views."""
+"""CVE Database API routes – search, list, detail."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
-from sqlalchemy import select, func, or_
+import logging
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+from sqlalchemy import select, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.cve import CVE
+from app.engine.query_engine import condition_to_sql_filter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cves", tags=["CVEs"])
 
@@ -16,106 +21,142 @@ router = APIRouter(prefix="/api/cves", tags=["CVEs"])
 @router.get("")
 async def list_cves(
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=500),
+    sort_by: str = Query("published_date"),
+    sort_order: str = Query("desc"),
+    severity: Optional[str] = None,
     vendor: Optional[str] = None,
     product: Optional[str] = None,
-    severity: Optional[str] = None,
-    min_cvss: Optional[float] = None,
-    max_cvss: Optional[float] = None,
-    kev_only: bool = False,
     search: Optional[str] = None,
-    sort_by: str = "published_date",
-    sort_order: str = "desc",
+    source: Optional[str] = None,
+    kev_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """List CVEs with filtering, pagination, and sorting."""
+    """List CVEs with filtering and pagination."""
     query = select(CVE)
 
-    # Filters
+    # Basic filters
+    if severity:
+        # Support comma-separated severities
+        sev_list = [s.strip().upper() for s in severity.split(",")]
+        query = query.where(CVE.severity.in_(sev_list))
+
     if vendor:
         query = query.where(CVE.vendor.ilike(f"%{vendor}%"))
+
     if product:
         query = query.where(CVE.product.ilike(f"%{product}%"))
-    if severity:
-        query = query.where(CVE.severity == severity.upper())
-    if min_cvss is not None:
-        query = query.where(CVE.cvss_score >= min_cvss)
-    if max_cvss is not None:
-        query = query.where(CVE.cvss_score <= max_cvss)
+
+    if source:
+        query = query.where(CVE.source == source)
+
     if kev_only:
         query = query.where(CVE.kev_flag == True)
+
     if search:
+        search_pattern = f"%{search}%"
+        from sqlalchemy import or_
         query = query.where(
             or_(
-                CVE.cve_id.ilike(f"%{search}%"),
-                CVE.description.ilike(f"%{search}%"),
-                CVE.vendor.ilike(f"%{search}%"),
-                CVE.product.ilike(f"%{search}%"),
+                CVE.cve_id.ilike(search_pattern),
+                CVE.vendor.ilike(search_pattern),
+                CVE.product.ilike(search_pattern),
+                CVE.description.ilike(search_pattern),
             )
         )
 
     # Count
     count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+    total = (await db.execute(count_query)).scalar() or 0
 
     # Sort
     sort_column = getattr(CVE, sort_by, CVE.published_date)
     if sort_order == "asc":
-        query = query.order_by(sort_column.asc())
+        query = query.order_by(asc(sort_column))
     else:
-        query = query.order_by(sort_column.desc())
+        query = query.order_by(desc(sort_column))
 
     # Paginate
-    offset = (page - 1) * per_page
-    query = query.offset(offset).limit(per_page)
+    query = query.offset((page - 1) * per_page).limit(per_page)
 
     result = await db.execute(query)
-    cves = result.scalars().all()
+    cves = [c.to_dict() for c in result.scalars().all()]
 
     return {
-        "items": [c.to_dict() for c in cves],
+        "cves": cves,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
-    }
-
-
-@router.get("/stats")
-async def cve_stats(db: AsyncSession = Depends(get_db)):
-    """Get CVE database statistics."""
-    total = (await db.execute(select(func.count()).select_from(CVE))).scalar() or 0
-    kev_count = (await db.execute(
-        select(func.count()).select_from(CVE).where(CVE.kev_flag == True)
-    )).scalar() or 0
-
-    severity_result = await db.execute(
-        select(CVE.severity, func.count()).group_by(CVE.severity)
-    )
-    severity_counts = {row[0] or "UNKNOWN": row[1] for row in severity_result.all()}
-
-    vendor_result = await db.execute(
-        select(CVE.vendor, func.count())
-        .where(CVE.vendor.isnot(None))
-        .group_by(CVE.vendor)
-        .order_by(func.count().desc())
-        .limit(20)
-    )
-    top_vendors = [{"vendor": row[0], "count": row[1]} for row in vendor_result.all()]
-
-    return {
-        "total_cves": total,
-        "kev_count": kev_count,
-        "severity_counts": severity_counts,
-        "top_vendors": top_vendors,
+        "pages": (total + per_page - 1) // per_page if per_page else 0,
     }
 
 
 @router.get("/{cve_id}")
 async def get_cve(cve_id: str, db: AsyncSession = Depends(get_db)):
+    """Get detailed CVE information."""
     result = await db.execute(select(CVE).where(CVE.cve_id == cve_id))
     cve = result.scalar_one_or_none()
     if not cve:
-        raise HTTPException(status_code=404, detail="CVE not found")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"CVE {cve_id} not found")
     return cve.to_dict()
+
+
+class AdvancedSearchRequest(BaseModel):
+    """Advanced search using the query engine."""
+    query: Dict[str, Any]
+    page: int = 1
+    per_page: int = 50
+    sort_by: str = "published_date"
+    sort_order: str = "desc"
+
+
+@router.post("/search")
+async def advanced_search(
+    data: AdvancedSearchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Advanced CVE search using the query engine.
+
+    Supports all operators: equal, not_equal, contains, not_contains,
+    blank, not_blank, starts_with, ends_with, regex, wildcards, nested queries.
+    """
+    base_query = select(CVE)
+
+    # Translate query conditions to SQL
+    try:
+        sql_filter = condition_to_sql_filter(CVE, data.query)
+        if sql_filter is not None:
+            base_query = base_query.where(sql_filter)
+    except Exception as e:
+        logger.error(f"Query translation failed: {e}")
+        return {
+            "error": f"Invalid query: {str(e)}",
+            "cves": [],
+            "total": 0,
+        }
+
+    # Count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # Sort
+    sort_column = getattr(CVE, data.sort_by, CVE.published_date)
+    if data.sort_order == "asc":
+        base_query = base_query.order_by(asc(sort_column))
+    else:
+        base_query = base_query.order_by(desc(sort_column))
+
+    # Paginate
+    base_query = base_query.offset((data.page - 1) * data.per_page).limit(data.per_page)
+
+    result = await db.execute(base_query)
+    cves = [c.to_dict() for c in result.scalars().all()]
+
+    return {
+        "cves": cves,
+        "total": total,
+        "page": data.page,
+        "per_page": data.per_page,
+        "pages": (total + data.per_page - 1) // data.per_page if data.per_page else 0,
+    }

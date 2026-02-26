@@ -1,36 +1,51 @@
-import React, { useState, useEffect } from 'react';
-import { getFilters, createFilter, updateFilter, deleteFilter, toggleFilter } from '../api';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+    getFilters, createFilter, updateFilter, deleteFilter, toggleFilter,
+    testFilterRule, exportFiltersYAML, importFiltersYAML, getQueryHelp
+} from '../api';
 
-const SEVERITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-
-const COMMON_VENDORS = [
-    'Fortinet', 'Cisco', 'Microsoft', 'Palo Alto Networks', 'VMware', 'Ivanti',
-    'SonicWall', 'Citrix', 'F5', 'Juniper', 'Check Point', 'CrowdStrike',
-    'Trend Micro', 'Sophos', 'Barracuda', 'Apache', 'Google', 'Apple',
-    'Adobe', 'Oracle', 'SAP', 'IBM', 'Linux', 'WordPress', 'Atlassian',
-];
+const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 export default function Filters() {
     const [filters, setFilters] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showModal, setShowModal] = useState(false);
-    const [editing, setEditing] = useState(null);
+    const [showEditor, setShowEditor] = useState(false);
+    const [editId, setEditId] = useState(null);
+    const [testResult, setTestResult] = useState(null);
+    const [showHelp, setShowHelp] = useState(false);
+    const [helpData, setHelpData] = useState(null);
+    const [importStatus, setImportStatus] = useState('');
+    const fileInputRef = useRef(null);
+
+    // Form state
     const [form, setForm] = useState({
-        name: '', vendor: '', products: [], enabled: true,
-        min_cvss: null, max_cvss: null, severity_filter: [],
-        keywords_include: [], keywords_exclude: [],
-        cpe_vendor: '', description: '',
+        name: '',
+        vendor: '',
+        products: [],
+        enabled: true,
+        min_cvss: '',
+        max_cvss: '',
+        severity_filter: [],
+        keywords_include: [],
+        keywords_exclude: [],
+        cpe_vendor: '',
+        description: '',
+        alert_on_modified: false,
+        conditions: null,
     });
     const [productInput, setProductInput] = useState('');
-    const [kwIncInput, setKwIncInput] = useState('');
-    const [kwExcInput, setKwExcInput] = useState('');
+    const [kwIncludeInput, setKwIncludeInput] = useState('');
+    const [kwExcludeInput, setKwExcludeInput] = useState('');
 
     const fetchFilters = async () => {
         try {
             const data = await getFilters();
             setFilters(data);
-        } catch (e) { console.error(e); }
-        finally { setLoading(false); }
+        } catch (e) {
+            console.error('Failed to load filters:', e);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useEffect(() => { fetchFilters(); }, []);
@@ -38,40 +53,58 @@ export default function Filters() {
     const resetForm = () => {
         setForm({
             name: '', vendor: '', products: [], enabled: true,
-            min_cvss: null, max_cvss: null, severity_filter: [],
-            keywords_include: [], keywords_exclude: [],
-            cpe_vendor: '', description: '',
+            min_cvss: '', max_cvss: '', severity_filter: [],
+            keywords_include: [], keywords_exclude: [], cpe_vendor: '',
+            description: '', alert_on_modified: false, conditions: null,
         });
         setProductInput('');
-        setKwIncInput('');
-        setKwExcInput('');
-        setEditing(null);
+        setKwIncludeInput('');
+        setKwExcludeInput('');
+        setEditId(null);
+        setTestResult(null);
     };
 
-    const openCreate = () => { resetForm(); setShowModal(true); };
-
-    const openEdit = (rule) => {
+    const handleEdit = (filter) => {
         setForm({
-            name: rule.name, vendor: rule.vendor, products: rule.products || [],
-            enabled: rule.enabled, min_cvss: rule.min_cvss, max_cvss: rule.max_cvss,
-            severity_filter: rule.severity_filter || [], keywords_include: rule.keywords_include || [],
-            keywords_exclude: rule.keywords_exclude || [], cpe_vendor: rule.cpe_vendor || '',
-            description: rule.description || '',
+            name: filter.name || '',
+            vendor: filter.vendor || '',
+            products: filter.products || [],
+            enabled: filter.enabled !== false,
+            min_cvss: filter.min_cvss ?? '',
+            max_cvss: filter.max_cvss ?? '',
+            severity_filter: filter.severity_filter || [],
+            keywords_include: filter.keywords_include || [],
+            keywords_exclude: filter.keywords_exclude || [],
+            cpe_vendor: filter.cpe_vendor || '',
+            description: filter.description || '',
+            alert_on_modified: filter.alert_on_modified || false,
+            conditions: filter.conditions || null,
         });
-        setEditing(rule.id);
-        setShowModal(true);
+        setEditId(filter.id);
+        setShowEditor(true);
+        setTestResult(null);
     };
 
-    const handleSubmit = async () => {
+    const handleSave = async () => {
+        const payload = {
+            ...form,
+            min_cvss: form.min_cvss !== '' ? parseFloat(form.min_cvss) : null,
+            max_cvss: form.max_cvss !== '' ? parseFloat(form.max_cvss) : null,
+            // Merge products into keywords_include (products become default include keywords)
+            keywords_include: [...new Set([...form.keywords_include, ...form.products.filter(p => !form.keywords_include.includes(p))])],
+        };
         try {
-            if (editing) {
-                await updateFilter(editing, form);
+            if (editId) {
+                await updateFilter(editId, payload);
             } else {
-                await createFilter(form);
+                await createFilter(payload);
             }
-            setShowModal(false);
+            resetForm();
+            setShowEditor(false);
             fetchFilters();
-        } catch (e) { alert(e.message); }
+        } catch (e) {
+            alert('Save failed: ' + e.message);
+        }
     };
 
     const handleDelete = async (id) => {
@@ -79,213 +112,484 @@ export default function Filters() {
         try {
             await deleteFilter(id);
             fetchFilters();
-        } catch (e) { alert(e.message); }
+        } catch (e) {
+            alert('Delete failed: ' + e.message);
+        }
     };
 
     const handleToggle = async (id) => {
         try {
             await toggleFilter(id);
             fetchFilters();
-        } catch (e) { alert(e.message); }
+        } catch (e) {
+            alert('Toggle failed: ' + e.message);
+        }
     };
 
-    const addTag = (field, inputVal, setInput) => {
-        if (!inputVal.trim()) return;
-        setForm(f => ({ ...f, [field]: [...f[field], inputVal.trim()] }));
-        setInput('');
+    const addProduct = () => {
+        const val = productInput.trim();
+        if (val && !form.products.includes(val)) {
+            setForm(f => ({ ...f, products: [...f.products, val] }));
+        }
+        setProductInput('');
     };
 
-    const removeTag = (field, idx) => {
-        setForm(f => ({ ...f, [field]: f[field].filter((_, i) => i !== idx) }));
+    const removeProduct = (p) => {
+        setForm(f => ({ ...f, products: f.products.filter(x => x !== p) }));
+    };
+
+    const addKwInclude = () => {
+        const val = kwIncludeInput.trim();
+        if (val && !form.keywords_include.includes(val)) {
+            setForm(f => ({ ...f, keywords_include: [...f.keywords_include, val] }));
+        }
+        setKwIncludeInput('');
+    };
+
+    const removeKwInclude = (kw) => {
+        setForm(f => ({ ...f, keywords_include: f.keywords_include.filter(x => x !== kw) }));
+    };
+
+    const addKwExclude = () => {
+        const val = kwExcludeInput.trim();
+        if (val && !form.keywords_exclude.includes(val)) {
+            setForm(f => ({ ...f, keywords_exclude: [...f.keywords_exclude, val] }));
+        }
+        setKwExcludeInput('');
+    };
+
+    const removeKwExclude = (kw) => {
+        setForm(f => ({ ...f, keywords_exclude: f.keywords_exclude.filter(x => x !== kw) }));
     };
 
     const toggleSeverity = (sev) => {
-        setForm(f => ({
-            ...f,
-            severity_filter: f.severity_filter.includes(sev)
-                ? f.severity_filter.filter(s => s !== sev)
-                : [...f.severity_filter, sev],
-        }));
+        setForm(f => {
+            const current = f.severity_filter || [];
+            if (current.includes(sev)) {
+                return { ...f, severity_filter: current.filter(s => s !== sev) };
+            }
+            return { ...f, severity_filter: [...current, sev] };
+        });
+    };
+
+    const handleTestFilter = async () => {
+        setTestResult({ loading: true });
+        try {
+            const result = await testFilterRule({
+                name: form.name || 'Test Rule',
+                vendor: form.vendor,
+                products: form.products,
+                min_cvss: form.min_cvss ? parseFloat(form.min_cvss) : null,
+                max_cvss: form.max_cvss ? parseFloat(form.max_cvss) : null,
+                severity_filter: form.severity_filter,
+                keywords_include: [...form.keywords_include, ...form.products],
+                keywords_exclude: form.keywords_exclude,
+                cpe_vendor: form.cpe_vendor,
+                alert_on_modified: form.alert_on_modified,
+                conditions: form.conditions,
+                send_test_alert: true,
+            });
+            setTestResult(result);
+        } catch (e) {
+            setTestResult({ status: 'error', message: e.message });
+        }
+    };
+
+    const handleExportYAML = async () => {
+        try {
+            await exportFiltersYAML();
+        } catch (e) {
+            alert('Export failed: ' + e.message);
+        }
+    };
+
+    const handleImportYAML = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImportStatus('Importing...');
+        try {
+            const result = await importFiltersYAML(file);
+            setImportStatus(`✅ ${result.message}`);
+            fetchFilters();
+        } catch (err) {
+            setImportStatus(`❌ Import failed: ${err.message}`);
+        }
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleShowHelp = async () => {
+        if (!helpData) {
+            try {
+                const data = await getQueryHelp();
+                setHelpData(data);
+            } catch (e) {
+                console.error('Failed to load help:', e);
+            }
+        }
+        setShowHelp(true);
     };
 
     if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading filters...</div></div>;
 
     return (
         <div className="main-content animate-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div className="header" style={{ marginBottom: 24, padding: 0, background: 'transparent', border: 'none', height: 'auto' }}>
                 <div>
-                    <h1 className="header-title">Filters & Tags</h1>
-                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Define vendor/product monitoring rules</p>
+                    <h1 className="header-title">Filter Rules</h1>
+                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Define CVE monitoring rules with advanced query support</p>
                 </div>
-                <button className="btn btn-primary" onClick={openCreate}>+ New Filter</button>
+                <div className="header-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="btn btn-primary" onClick={() => { resetForm(); setShowEditor(true); }}>+ New Filter</button>
+                    <button className="btn btn-secondary" onClick={handleExportYAML}>📥 Export YAML</button>
+                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+                        📤 Import YAML
+                        <input type="file" accept=".yaml,.yml,.json" ref={fileInputRef}
+                            onChange={handleImportYAML} style={{ display: 'none' }} />
+                    </label>
+                    <button className="btn btn-secondary" onClick={handleShowHelp} title="Query Language Help"
+                        style={{ padding: '8px 12px', fontSize: 16 }}>❓</button>
+                </div>
             </div>
 
-            {/* Filter Cards */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {filters.map(rule => (
-                    <div key={rule.id} className="card" style={{ opacity: rule.enabled ? 1 : 0.5 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ flex: 1 }}>
-                                <div className="flex items-center gap-12 mb-8">
-                                    <h3 style={{ fontSize: 16, fontWeight: 700 }}>{rule.name}</h3>
-                                    <span className={`badge ${rule.enabled ? 'badge-success' : 'badge-error'}`}>
-                                        {rule.enabled ? 'Active' : 'Disabled'}
-                                    </span>
-                                </div>
-                                <div className="flex gap-16 mb-12" style={{ flexWrap: 'wrap' }}>
-                                    <span className="text-sm"><strong style={{ color: 'var(--purple-400)' }}>Vendor:</strong> {rule.vendor}</span>
-                                    {rule.products?.length > 0 && (
-                                        <span className="text-sm"><strong style={{ color: 'var(--purple-400)' }}>Products:</strong> {rule.products.join(', ')}</span>
-                                    )}
-                                    {rule.min_cvss && <span className="text-sm"><strong style={{ color: 'var(--purple-400)' }}>Min CVSS:</strong> {rule.min_cvss}</span>}
-                                    {rule.max_cvss && <span className="text-sm"><strong style={{ color: 'var(--purple-400)' }}>Max CVSS:</strong> {rule.max_cvss}</span>}
-                                </div>
-                                {rule.severity_filter?.length > 0 && (
-                                    <div className="flex gap-8 mb-8">
-                                        {rule.severity_filter.map(s => (
-                                            <span key={s} className={`badge badge-${s.toLowerCase()}`}>{s}</span>
-                                        ))}
-                                    </div>
-                                )}
-                                {rule.description && <p className="text-sm text-muted">{rule.description}</p>}
-                            </div>
-                            <div className="flex gap-8">
-                                <label className="toggle">
-                                    <input type="checkbox" checked={rule.enabled} onChange={() => handleToggle(rule.id)} />
-                                    <span className="toggle-slider" />
-                                </label>
-                                <button className="btn btn-secondary btn-sm" onClick={() => openEdit(rule)}>✏️</button>
-                                <button className="btn btn-danger btn-sm" onClick={() => handleDelete(rule.id)}>🗑️</button>
-                            </div>
-                        </div>
-                    </div>
-                ))}
-                {filters.length === 0 && (
-                    <div className="empty-state">
-                        <div className="empty-icon">🔍</div>
-                        <h3>No Filters Configured</h3>
-                        <p className="text-muted">Create your first filter rule to start monitoring CVEs for specific vendors and products.</p>
-                        <button className="btn btn-primary mt-16" onClick={openCreate}>+ Create Filter</button>
-                    </div>
-                )}
-            </div>
+            {importStatus && (
+                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: importStatus.includes('✅') ? 'var(--success)' : 'var(--error)' }}>
+                    <span className="text-sm">{importStatus}</span>
+                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                        onClick={() => setImportStatus('')}>✕</button>
+                </div>
+            )}
 
-            {/* Create/Edit Modal */}
-            {showModal && (
-                <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700, maxHeight: '90vh' }}>
-                        <div className="modal-header">
-                            <h2 className="modal-title">{editing ? 'Edit Filter Rule' : 'New Filter Rule'}</h2>
-                            <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
-                        </div>
-
+            {/* Filter Editor */}
+            {showEditor && (
+                <div className="card mb-24">
+                    <div className="card-header">
+                        <div className="card-title">{editId ? 'Edit Filter Rule' : 'New Filter Rule'}</div>
+                        <button className="btn btn-secondary" onClick={() => { setShowEditor(false); resetForm(); }}
+                            style={{ padding: '4px 12px', fontSize: 12 }}>✕ Close</button>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '0 20px 20px' }}>
+                        {/* Rule Name */}
                         <div className="form-group">
-                            <label className="form-label">Rule Name</label>
-                            <input className="form-input" placeholder="e.g., Fortinet Critical Products"
+                            <label className="form-label">Rule Name *</label>
+                            <input className="form-input" placeholder="e.g., Fortinet Critical Alerts"
                                 value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
                         </div>
-
-                        <div className="grid-2">
-                            <div className="form-group">
-                                <label className="form-label">Vendor</label>
-                                <select className="form-select" value={form.vendor}
-                                    onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))}>
-                                    <option value="">Select vendor...</option>
-                                    {COMMON_VENDORS.map(v => <option key={v} value={v.toLowerCase()}>{v}</option>)}
-                                    <option value="__custom">Custom...</option>
-                                </select>
-                                {form.vendor === '__custom' && (
-                                    <input className="form-input" style={{ marginTop: 8 }} placeholder="Enter vendor name"
-                                        onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} />
-                                )}
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">CPE Vendor (optional)</label>
-                                <input className="form-input" placeholder="e.g., fortinet"
-                                    value={form.cpe_vendor} onChange={e => setForm(f => ({ ...f, cpe_vendor: e.target.value }))} />
-                            </div>
-                        </div>
-
+                        {/* Vendor (text input, NOT dropdown) */}
                         <div className="form-group">
-                            <label className="form-label">Products (press Enter to add)</label>
-                            <div className="tags-input">
-                                {form.products.map((p, i) => (
-                                    <span key={i} className="tag">{p} <span className="tag-remove" onClick={() => removeTag('products', i)}>✕</span></span>
-                                ))}
-                                <input placeholder="Add product..." value={productInput}
+                            <label className="form-label">Vendor</label>
+                            <input className="form-input" placeholder="Type vendor name (e.g., fortinet, microsoft)"
+                                value={form.vendor} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} />
+                        </div>
+
+                        {/* Products + Include Keywords (merged) */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                            <label className="form-label">Products & Include Keywords</label>
+                            <p className="text-sm text-muted" style={{ marginBottom: 8 }}>Products are automatically included as keywords. Default keywords: CVE, vulnerability</p>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <input className="form-input" placeholder="Add product/keyword..."
+                                    value={productInput}
                                     onChange={e => setProductInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag('products', productInput, setProductInput); } }} />
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addProduct(); } }} />
+                                <button className="btn btn-secondary" onClick={addProduct} style={{ whiteSpace: 'nowrap' }}>+ Add</button>
                             </div>
-                            <span className="text-xs text-muted">e.g., FortiGate, FortiEDR, FortiMail</span>
+                            {form.products.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                    {form.products.map(p => (
+                                        <span key={p} className="badge" style={{
+                                            background: 'rgba(124,58,237,0.2)', color: '#A855F7', padding: '4px 10px',
+                                            cursor: 'pointer', borderRadius: 6,
+                                        }} onClick={() => removeProduct(p)}>
+                                            {p} ✕
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
-                        <div className="grid-2">
-                            <div className="form-group">
-                                <label className="form-label">Min CVSS Score: {form.min_cvss ?? 0}</label>
-                                <input type="range" min="0" max="10" step="0.1"
-                                    value={form.min_cvss ?? 0}
-                                    onChange={e => setForm(f => ({ ...f, min_cvss: parseFloat(e.target.value) || null }))} />
+                        {/* Additional Include Keywords */}
+                        <div className="form-group">
+                            <label className="form-label">Extra Include Keywords</label>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <input className="form-input" placeholder="Additional keyword..."
+                                    value={kwIncludeInput}
+                                    onChange={e => setKwIncludeInput(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKwInclude(); } }} />
+                                <button className="btn btn-secondary" onClick={addKwInclude}>+</button>
                             </div>
-                            <div className="form-group">
-                                <label className="form-label">Max CVSS Score: {form.max_cvss ?? 10}</label>
-                                <input type="range" min="0" max="10" step="0.1"
-                                    value={form.max_cvss ?? 10}
-                                    onChange={e => setForm(f => ({ ...f, max_cvss: parseFloat(e.target.value) || null }))} />
-                            </div>
+                            {form.keywords_include.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                    {form.keywords_include.map(kw => (
+                                        <span key={kw} className="badge" style={{
+                                            background: 'rgba(74,222,128,0.2)', color: '#4ADE80', padding: '4px 10px',
+                                            cursor: 'pointer', borderRadius: 6,
+                                        }} onClick={() => removeKwInclude(kw)}>
+                                            {kw} ✕
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
+                        {/* Exclude Keywords */}
+                        <div className="form-group">
+                            <label className="form-label">Exclude Keywords</label>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <input className="form-input" placeholder="Keyword to exclude..."
+                                    value={kwExcludeInput}
+                                    onChange={e => setKwExcludeInput(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKwExclude(); } }} />
+                                <button className="btn btn-secondary" onClick={addKwExclude}>+</button>
+                            </div>
+                            {form.keywords_exclude.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                    {form.keywords_exclude.map(kw => (
+                                        <span key={kw} className="badge" style={{
+                                            background: 'rgba(255,68,68,0.2)', color: '#FF4444', padding: '4px 10px',
+                                            cursor: 'pointer', borderRadius: 6,
+                                        }} onClick={() => removeKwExclude(kw)}>
+                                            {kw} ✕
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Severity Filter (checkboxes for multi-select) */}
                         <div className="form-group">
                             <label className="form-label">Severity Filter</label>
-                            <div className="checkbox-group">
-                                {SEVERITY_OPTIONS.map(sev => (
-                                    <div key={sev}
-                                        className={`checkbox-item ${form.severity_filter.includes(sev) ? 'selected' : ''}`}
-                                        onClick={() => toggleSeverity(sev)}>
-                                        <span className={`badge badge-${sev.toLowerCase()}`} style={{ padding: '2px 8px' }}>{sev}</span>
-                                    </div>
+                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                                {SEVERITIES.map(sev => (
+                                    <label key={sev} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                        <input type="checkbox" checked={(form.severity_filter || []).includes(sev)}
+                                            onChange={() => toggleSeverity(sev)}
+                                            style={{ accentColor: 'var(--purple-400)' }} />
+                                        <span className={`badge badge-${sev.toLowerCase()}`}>{sev}</span>
+                                    </label>
                                 ))}
                             </div>
                         </div>
 
+                        {/* CVSS Range */}
                         <div className="form-group">
-                            <label className="form-label">Keywords Include (press Enter)</label>
-                            <div className="tags-input">
-                                {form.keywords_include.map((k, i) => (
-                                    <span key={i} className="tag">{k} <span className="tag-remove" onClick={() => removeTag('keywords_include', i)}>✕</span></span>
-                                ))}
-                                <input placeholder="Add keyword..." value={kwIncInput}
-                                    onChange={e => setKwIncInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag('keywords_include', kwIncInput, setKwIncInput); } }} />
+                            <label className="form-label">CVSS Score Range</label>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="Min"
+                                    value={form.min_cvss} onChange={e => setForm(f => ({ ...f, min_cvss: e.target.value }))}
+                                    style={{ width: 100 }} />
+                                <span className="text-muted">to</span>
+                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="Max"
+                                    value={form.max_cvss} onChange={e => setForm(f => ({ ...f, max_cvss: e.target.value }))}
+                                    style={{ width: 100 }} />
                             </div>
                         </div>
 
-                        <div className="form-group">
-                            <label className="form-label">Keywords Exclude (press Enter)</label>
-                            <div className="tags-input">
-                                {form.keywords_exclude.map((k, i) => (
-                                    <span key={i} className="tag" style={{ borderColor: 'rgba(239,68,68,0.3)', color: 'var(--error)' }}>
-                                        {k} <span className="tag-remove" onClick={() => removeTag('keywords_exclude', i)}>✕</span>
-                                    </span>
-                                ))}
-                                <input placeholder="Exclude keyword..." value={kwExcInput}
-                                    onChange={e => setKwExcInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag('keywords_exclude', kwExcInput, setKwExcInput); } }} />
+                        {/* Alert on Modified / Updated CVE */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={form.alert_on_modified}
+                                        onChange={e => setForm(f => ({ ...f, alert_on_modified: e.target.checked }))}
+                                        style={{ accentColor: 'var(--purple-400)' }} />
+                                    <span>🔄 Alert when CVE is updated/modified</span>
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={form.enabled}
+                                        onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
+                                        style={{ accentColor: 'var(--purple-400)' }} />
+                                    <span>✅ Enabled</span>
+                                </label>
                             </div>
                         </div>
 
-                        <div className="form-group">
+                        {/* Description */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
                             <label className="form-label">Description</label>
-                            <textarea className="form-textarea" placeholder="Optional description for this rule"
+                            <textarea className="form-input" rows="2" placeholder="Optional description for this rule..."
                                 value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
                         </div>
+                    </div>
 
-                        <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                            <button className="btn btn-primary" onClick={handleSubmit}
-                                disabled={!form.name || !form.vendor}>
-                                {editing ? '💾 Save Changes' : '+ Create Filter'}
-                            </button>
+                    {/* Actions */}
+                    <div style={{ display: 'flex', gap: 12, padding: '0 20px 20px', flexWrap: 'wrap' }}>
+                        <button className="btn btn-primary" onClick={handleSave}>
+                            {editId ? '💾 Update Rule' : '✨ Create Rule'}
+                        </button>
+                        <button className="btn btn-secondary" onClick={handleTestFilter}>
+                            🧪 Test Filter
+                        </button>
+                        <button className="btn btn-secondary" onClick={() => { setShowEditor(false); resetForm(); }}>
+                            Cancel
+                        </button>
+                    </div>
+
+                    {/* Test Result */}
+                    {testResult && (
+                        <div className="card" style={{ margin: '0 20px 20px', padding: 16, borderColor: 'var(--border-accent)' }}>
+                            {testResult.loading ? (
+                                <div className="loading"><div className="loading-spinner" />Testing filter...</div>
+                            ) : testResult.status === 'error' ? (
+                                <div style={{ color: 'var(--error)' }}>❌ {testResult.message}</div>
+                            ) : (
+                                <div>
+                                    <div style={{ marginBottom: 8, fontWeight: 'bold', color: testResult.matches > 0 ? 'var(--success)' : 'var(--warning)' }}>
+                                        {testResult.matches > 0 ? `✅ ${testResult.matches} matches found` : '⚠️ No matches'}
+                                        <span className="text-muted text-sm" style={{ marginLeft: 8 }}>
+                                            (tested against {testResult.total_tested} CVEs)
+                                        </span>
+                                    </div>
+                                    {testResult.matched_cves && testResult.matched_cves.length > 0 && (
+                                        <div className="table-container" style={{ maxHeight: 200, overflow: 'auto' }}>
+                                            <table>
+                                                <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th></tr></thead>
+                                                <tbody>
+                                                    {testResult.matched_cves.map(c => (
+                                                        <tr key={c.cve_id}>
+                                                            <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{c.cve_id}</td>
+                                                            <td>{c.vendor || '—'}</td>
+                                                            <td><span className={`badge badge-${(c.severity || 'unknown').toLowerCase()}`}>{c.severity || 'N/A'}</span></td>
+                                                            <td className="text-mono">{c.cvss_score ?? '—'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
+                    )}
+                </div>
+            )}
+
+            {/* Filter List */}
+            <div className="card">
+                <div className="card-header">
+                    <div className="card-title">Active Rules ({filters.length})</div>
+                </div>
+                <div className="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Vendor</th>
+                                <th>Products</th>
+                                <th>Severity</th>
+                                <th>CVSS Range</th>
+                                <th>Modified Alert</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filters.map(f => (
+                                <tr key={f.id}>
+                                    <td style={{ fontWeight: 600 }}>{f.name}</td>
+                                    <td className="text-sm">{f.vendor || '—'}</td>
+                                    <td className="text-sm">
+                                        {(f.products || []).length > 0
+                                            ? (f.products || []).slice(0, 3).join(', ') + (f.products.length > 3 ? ` +${f.products.length - 3}` : '')
+                                            : '—'}
+                                    </td>
+                                    <td>
+                                        {(f.severity_filter || []).length > 0
+                                            ? (f.severity_filter || []).map(s => (
+                                                <span key={s} className={`badge badge-${s.toLowerCase()}`} style={{ marginRight: 4, fontSize: 10 }}>{s}</span>
+                                            ))
+                                            : '—'}
+                                    </td>
+                                    <td className="text-mono text-sm">
+                                        {f.min_cvss != null || f.max_cvss != null
+                                            ? `${f.min_cvss ?? 0} – ${f.max_cvss ?? 10}`
+                                            : '—'}
+                                    </td>
+                                    <td>{f.alert_on_modified ? '🔄 Yes' : '—'}</td>
+                                    <td>
+                                        <span className={`badge ${f.enabled ? 'badge-success' : 'badge-error'}`}
+                                            style={{ cursor: 'pointer' }} onClick={() => handleToggle(f.id)}>
+                                            {f.enabled ? 'Active' : 'Disabled'}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div style={{ display: 'flex', gap: 6 }}>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
+                                                onClick={() => handleEdit(f)}>✏️ Edit</button>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                                                onClick={() => handleDelete(f.id)}>🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {filters.length === 0 && (
+                                <tr><td colSpan="8" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
+                                    No filter rules yet. Create one or import from YAML.
+                                </td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Query Help Modal */}
+            {showHelp && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center',
+                    zIndex: 1000, padding: 20,
+                }} onClick={() => setShowHelp(false)}>
+                    <div style={{
+                        background: 'var(--card-bg)', borderRadius: 12, padding: 30,
+                        maxWidth: 800, maxHeight: '80vh', overflow: 'auto', width: '100%',
+                        border: '1px solid var(--border-accent)',
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+                            <h2 style={{ color: 'var(--purple-400)', margin: 0 }}>📖 Query Language Reference</h2>
+                            <button className="btn btn-secondary" onClick={() => setShowHelp(false)}
+                                style={{ padding: '4px 12px' }}>✕</button>
+                        </div>
+
+                        {helpData ? (
+                            <div>
+                                <h3>Operators</h3>
+                                <div className="table-container">
+                                    <table>
+                                        <thead><tr><th>Operator</th><th>Description</th></tr></thead>
+                                        <tbody>
+                                            {helpData.operators?.map(op => (
+                                                <tr key={op.name}>
+                                                    <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{op.name}</td>
+                                                    <td className="text-sm">{op.description}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <h3 style={{ marginTop: 20 }}>Wildcards</h3>
+                                <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 8 }}>
+                                    <p><code className="text-mono" style={{ color: '#A855F7' }}>*</code> — {helpData.wildcards?.['*']}</p>
+                                    <p style={{ marginTop: 8 }}><code className="text-mono" style={{ color: '#A855F7' }}>?</code> — {helpData.wildcards?.['?']}</p>
+                                </div>
+
+                                <h3 style={{ marginTop: 20 }}>Case Sensitivity</h3>
+                                <p className="text-sm text-muted">{helpData.case_sensitivity}</p>
+
+                                <h3 style={{ marginTop: 20 }}>Available Fields</h3>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                    {helpData.fields?.map(f => (
+                                        <span key={f} className="badge" style={{ background: 'rgba(124,58,237,0.2)', color: '#A855F7', padding: '4px 8px' }}>
+                                            {f}
+                                        </span>
+                                    ))}
+                                </div>
+
+                                <h3 style={{ marginTop: 20 }}>Nested Query Example</h3>
+                                <pre style={{ padding: 16, background: 'rgba(0,0,0,0.3)', borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
+                                    {JSON.stringify(helpData.nesting?.example, null, 2)}
+                                </pre>
+                            </div>
+                        ) : (
+                            <div className="loading"><div className="loading-spinner" />Loading help...</div>
+                        )}
                     </div>
                 </div>
             )}

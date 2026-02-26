@@ -23,10 +23,25 @@ async function request(endpoint, options = {}) {
     return res.json();
 }
 
+async function requestRaw(endpoint, options = {}) {
+    const url = `${API_BASE}${endpoint}`;
+    const res = await fetch(url, options);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res;
+}
+
 // ── Dashboard ────────────────────────────────
 export const getDashboardOverview = () => request('/dashboard/overview');
-export const initializeDB = (vendorKeyword) =>
-    request('/dashboard/initialize-db', { method: 'POST', body: { vendor_keyword: vendorKeyword || null } });
+export const initializeDB = () =>
+    request('/dashboard/initialize-db', { method: 'POST', body: {} });
+export const initializeDBLocal = (mitreDir, nvdDir) =>
+    request('/dashboard/initialize-db-local', {
+        method: 'POST',
+        body: { mitre_dir: mitreDir || null, nvd_dir: nvdDir || null },
+    });
 export const triggerScan = () => request('/dashboard/trigger-scan', { method: 'POST' });
 export const getTaskStatus = (taskId) => request(`/dashboard/task-status/${taskId}`);
 
@@ -37,6 +52,31 @@ export const createFilter = (data) => request('/filters', { method: 'POST', body
 export const updateFilter = (id, data) => request(`/filters/${id}`, { method: 'PUT', body: data });
 export const deleteFilter = (id) => request(`/filters/${id}`, { method: 'DELETE' });
 export const toggleFilter = (id) => request(`/filters/${id}/toggle`, { method: 'POST' });
+export const testFilterRule = (data) => request('/filters/test', { method: 'POST', body: data });
+export const getQueryHelp = () => request('/filters/query-help');
+
+export const exportFiltersYAML = async () => {
+    const res = await requestRaw('/filters/export/yaml');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'abusecve_filters.yaml';
+    a.click();
+    URL.revokeObjectURL(url);
+};
+
+export const importFiltersYAML = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const url = `${API_BASE}/filters/import/yaml`;
+    const res = await fetch(url, { method: 'POST', body: formData });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+};
 
 // ── CVEs ─────────────────────────────────────
 export const getCVEs = (params = {}) => {
@@ -44,8 +84,9 @@ export const getCVEs = (params = {}) => {
     Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, v); });
     return request(`/cves?${qs.toString()}`);
 };
-export const getCVEStats = () => request('/cves/stats');
 export const getCVE = (cveId) => request(`/cves/${cveId}`);
+export const searchCVEs = (query, page = 1, perPage = 50) =>
+    request('/cves/search', { method: 'POST', body: { query, page, per_page: perPage } });
 
 // ── Alerts ───────────────────────────────────
 export const getAlerts = (params = {}) => {
@@ -61,6 +102,21 @@ export const getKA = (id) => request(`/knowledge-articles/${id}`);
 export const createKA = (data) => request('/knowledge-articles', { method: 'POST', body: data });
 export const updateKA = (id, data) => request(`/knowledge-articles/${id}`, { method: 'PUT', body: data });
 export const deleteKA = (id) => request(`/knowledge-articles/${id}`, { method: 'DELETE' });
+export const generateKA = (cveId, aiProvider = 'auto') =>
+    request(`/knowledge-articles/generate/${cveId}`, {
+        method: 'POST',
+        body: { ai_provider: aiProvider },
+    });
+export const exportKA = async (kaId) => {
+    const res = await requestRaw(`/knowledge-articles/${kaId}/export`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `KA_${kaId}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+};
 
 // ── Config ───────────────────────────────────
 export const getConfig = () => request('/config');
@@ -69,7 +125,7 @@ export const updateConfig = (data) => request('/config', { method: 'PUT', body: 
 // ── Test ─────────────────────────────────────
 export const testSMTP = () => request('/test/smtp', { method: 'POST' });
 export const testFetch = () => request('/test/fetch', { method: 'POST' });
-export const testFilter = () => request('/test/filter', { method: 'POST' });
+export const testFilterEndpoint = () => request('/test/filter', { method: 'POST' });
 export const testPipeline = () => request('/test/pipeline', { method: 'POST' });
 export const testFullChain = () => request('/test/full-chain', { method: 'POST' });
 

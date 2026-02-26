@@ -34,9 +34,19 @@ export default function Configuration() {
                 setMessage('No changes to save.');
                 return;
             }
-            // Don't send masked password
+            // Don't send masked passwords/keys
             if (changed.smtp_password === '***') delete changed.smtp_password;
             if (changed.nvd_api_key?.startsWith('***')) delete changed.nvd_api_key;
+            if (changed.mistral_api_key?.startsWith('***')) delete changed.mistral_api_key;
+            if (changed.gemini_api_key?.startsWith('***')) delete changed.gemini_api_key;
+
+            // Parse combined time field back to hour/minute
+            if (changed.health_report_time) {
+                const [h, m] = changed.health_report_time.split(':');
+                changed.health_report_hour = parseInt(h);
+                changed.health_report_minute = parseInt(m);
+                delete changed.health_report_time;
+            }
 
             await updateConfig(changed);
             setMessage('✅ Configuration saved successfully!');
@@ -113,17 +123,15 @@ export default function Configuration() {
                             onChange={e => setForm(f => ({ ...f, scan_interval_minutes: parseInt(e.target.value) }))} />
                         <span className="text-xs text-muted">NVD recommends no more than once every 2 hours (120 min)</span>
                     </div>
-                    <div className="grid-2">
-                        <div className="form-group">
-                            <label className="form-label">Health Report Hour (UTC)</label>
-                            <input className="form-input" type="number" min="0" max="23" value={form.health_report_hour ?? 23}
-                                onChange={e => setForm(f => ({ ...f, health_report_hour: parseInt(e.target.value) }))} />
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Health Report Minute</label>
-                            <input className="form-input" type="number" min="0" max="59" value={form.health_report_minute ?? 59}
-                                onChange={e => setForm(f => ({ ...f, health_report_minute: parseInt(e.target.value) }))} />
-                        </div>
+                    <div className="form-group">
+                        <label className="form-label">Health Report Time (UTC)</label>
+                        <input className="form-input" type="time"
+                            value={`${String(form.health_report_hour ?? 23).padStart(2, '0')}:${String(form.health_report_minute ?? 59).padStart(2, '0')}`}
+                            onChange={e => {
+                                const [h, m] = e.target.value.split(':');
+                                setForm(f => ({ ...f, health_report_hour: parseInt(h), health_report_minute: parseInt(m), health_report_time: e.target.value }));
+                            }} />
+                        <span className="text-xs text-muted">Daily health report will be sent at this time (UTC)</span>
                     </div>
                 </div>
             </div>
@@ -138,6 +146,20 @@ export default function Configuration() {
                         placeholder="Enter NVD API key for higher rate limits" />
                     <span className="text-xs text-muted">Get a key from <a href="https://nvd.nist.gov/developers/request-an-api-key" target="_blank" style={{ color: 'var(--purple-400)' }}>NVD Developers</a></span>
                 </div>
+                <div className="form-group">
+                    <label className="form-label">Mistral AI API Key</label>
+                    <input className="form-input" type="password" value={form.mistral_api_key || ''}
+                        onChange={e => setForm(f => ({ ...f, mistral_api_key: e.target.value }))}
+                        placeholder="Enter Mistral AI API key for KA generation" />
+                    <span className="text-xs text-muted">Get a free key from <a href="https://console.mistral.ai/" target="_blank" style={{ color: 'var(--purple-400)' }}>Mistral AI Console</a></span>
+                </div>
+                <div className="form-group">
+                    <label className="form-label">Google Gemini API Key</label>
+                    <input className="form-input" type="password" value={form.gemini_api_key || ''}
+                        onChange={e => setForm(f => ({ ...f, gemini_api_key: e.target.value }))}
+                        placeholder="Enter Gemini API key for KA generation" />
+                    <span className="text-xs text-muted">Get a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style={{ color: 'var(--purple-400)' }}>Google AI Studio</a></span>
+                </div>
             </div>
 
             {/* Current Status */}
@@ -146,6 +168,8 @@ export default function Configuration() {
                 <div className="grid-2" style={{ gap: 12 }}>
                     <div><span className="text-xs text-muted">Environment</span><p className="text-sm">{config.app_env || 'N/A'}</p></div>
                     <div><span className="text-xs text-muted">NVD API Status</span><p className="text-sm">{config.nvd_api_key?.startsWith('***') ? '✅ Configured' : '⚠️ Not Set'}</p></div>
+                    <div><span className="text-xs text-muted">Mistral AI</span><p className="text-sm">{config.mistral_api_key?.startsWith('***') ? '✅ Configured' : '⚠️ Not Set'}</p></div>
+                    <div><span className="text-xs text-muted">Google Gemini</span><p className="text-sm">{config.gemini_api_key?.startsWith('***') ? '✅ Configured' : '⚠️ Not Set'}</p></div>
                 </div>
             </div>
         </div>

@@ -1,171 +1,247 @@
 import React, { useState, useEffect } from 'react';
-import { getKAs, createKA, updateKA, deleteKA, getCVEs } from '../api';
+import { getKAs, deleteKA, generateKA, exportKA, getCVEs } from '../api';
 
 export default function KnowledgeArticles() {
-    const [articles, setArticles] = useState([]);
+    const [kas, setKAs] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showModal, setShowModal] = useState(false);
-    const [selected, setSelected] = useState(null);
-    const [form, setForm] = useState({ title: '', cve_ids: [], content: '', summary: '', recommendations: '', author: '' });
-    const [cveInput, setCveInput] = useState('');
+    const [generating, setGenerating] = useState('');
+    const [genStatus, setGenStatus] = useState('');
+    const [showPreview, setShowPreview] = useState(null);
+    const [cveSearch, setCveSearch] = useState('');
+    const [cveResults, setCveResults] = useState([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [aiProvider, setAiProvider] = useState('auto');
 
     const fetchKAs = async () => {
-        try { setArticles(await getKAs()); } catch (e) { console.error(e); }
-        finally { setLoading(false); }
+        try {
+            const data = await getKAs();
+            setKAs(data);
+        } catch (e) {
+            console.error('Failed to load KAs:', e);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useEffect(() => { fetchKAs(); }, []);
 
-    const handleCreate = async () => {
+    const handleGenerate = async (cveId) => {
+        setGenerating(cveId);
+        setGenStatus(`Generating report for ${cveId}...`);
         try {
-            await createKA(form);
-            setShowModal(false);
-            setForm({ title: '', cve_ids: [], content: '', summary: '', recommendations: '', author: '' });
+            const result = await generateKA(cveId, aiProvider);
+            setGenStatus(`✅ Report generated for ${cveId}`);
+            setShowPreview(result);
             fetchKAs();
-        } catch (e) { alert(e.message); }
+        } catch (e) {
+            setGenStatus(`❌ Generation failed: ${e.message}`);
+        } finally {
+            setGenerating('');
+        }
     };
 
     const handleDelete = async (id) => {
         if (!confirm('Delete this Knowledge Article?')) return;
-        try { await deleteKA(id); fetchKAs(); } catch (e) { alert(e.message); }
+        try {
+            await deleteKA(id);
+            fetchKAs();
+        } catch (e) {
+            alert('Delete failed: ' + e.message);
+        }
     };
 
-    const addCVE = () => {
-        if (!cveInput.trim()) return;
-        setForm(f => ({ ...f, cve_ids: [...f.cve_ids, cveInput.trim().toUpperCase()] }));
-        setCveInput('');
+    const handleExport = async (kaId) => {
+        try {
+            await exportKA(kaId);
+        } catch (e) {
+            alert('Export failed: ' + e.message);
+        }
     };
 
-    if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading...</div></div>;
+    const handleCopy = (content) => {
+        navigator.clipboard.writeText(content).then(
+            () => setGenStatus('📋 Copied to clipboard!'),
+            () => setGenStatus('❌ Copy failed')
+        );
+    };
+
+    const handleCVESearch = async () => {
+        if (!cveSearch.trim()) return;
+        setSearchLoading(true);
+        try {
+            const result = await getCVEs({ search: cveSearch, per_page: 20 });
+            setCveResults(result.cves || []);
+        } catch (e) {
+            console.error('Search failed:', e);
+        } finally {
+            setSearchLoading(false);
+        }
+    };
+
+    if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading knowledge articles...</div></div>;
 
     return (
         <div className="main-content animate-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div className="header" style={{ marginBottom: 24, padding: 0, background: 'transparent', border: 'none', height: 'auto' }}>
                 <div>
                     <h1 className="header-title">Knowledge Articles</h1>
-                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>CVE analysis reports and documentation</p>
+                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Auto-generate vulnerability reports for CVEs</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => setShowModal(true)}>+ New Article</button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {articles.map(ka => (
-                    <div key={ka.id} className="card" style={{ cursor: 'pointer' }} onClick={() => setSelected(ka)}>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <div className="flex items-center gap-12 mb-8">
-                                    <h3 style={{ fontSize: 16, fontWeight: 700 }}>{ka.title}</h3>
-                                    <span className={`badge ${ka.status === 'published' ? 'badge-success' : 'badge-info'}`}>{ka.status}</span>
-                                    {ka.severity_assessment && (
-                                        <span className={`badge badge-${ka.severity_assessment.toLowerCase()}`}>{ka.severity_assessment}</span>
-                                    )}
-                                </div>
-                                <p className="text-sm text-muted mb-8">{ka.summary || 'No summary'}</p>
-                                <div className="flex gap-8">
-                                    {(ka.cve_ids || []).slice(0, 5).map(id => (
-                                        <span key={id} className="tag">{id}</span>
+            {genStatus && (
+                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: genStatus.includes('✅') || genStatus.includes('📋') ? 'var(--success)' : genStatus.includes('❌') ? 'var(--error)' : 'var(--border-accent)' }}>
+                    <span className="text-sm">{genStatus}</span>
+                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                        onClick={() => setGenStatus('')}>✕</button>
+                </div>
+            )}
+
+            {/* Generate Section */}
+            <div className="card mb-24">
+                <div className="card-header">
+                    <div className="card-title">🤖 Generate Vulnerability Report</div>
+                </div>
+                <div style={{ padding: '0 20px 20px' }}>
+                    <p className="text-sm text-muted mb-16">Search for a CVE in the database, then click Generate to create a report.</p>
+
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                        <input className="form-input" placeholder="Search CVE ID, vendor, product..."
+                            value={cveSearch} onChange={e => setCveSearch(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleCVESearch(); }} />
+                        <button className="btn btn-primary" onClick={handleCVESearch} disabled={searchLoading}>
+                            {searchLoading ? '...' : '🔍 Search'}
+                        </button>
+                    </div>
+
+                    {/* AI Provider Selection */}
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                        <span className="text-sm text-muted" style={{ marginTop: 4 }}>AI Provider:</span>
+                        {['auto', 'mistral', 'gemini', 'template'].map(p => (
+                            <label key={p} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                                <input type="radio" name="aiProvider" checked={aiProvider === p} onChange={() => setAiProvider(p)} />
+                                <span className="text-sm" style={{ textTransform: 'capitalize' }}>{p}</span>
+                            </label>
+                        ))}
+                    </div>
+
+                    {/* Search Results */}
+                    {cveResults.length > 0 && (
+                        <div className="table-container" style={{ maxHeight: 300, overflow: 'auto' }}>
+                            <table>
+                                <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th><th>Action</th></tr></thead>
+                                <tbody>
+                                    {cveResults.map(cve => (
+                                        <tr key={cve.cve_id}>
+                                            <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{cve.cve_id}</td>
+                                            <td className="text-sm">{cve.vendor || '—'}</td>
+                                            <td><span className={`badge badge-${(cve.severity || 'unknown').toLowerCase()}`}>{cve.severity || 'N/A'}</span></td>
+                                            <td className="text-mono">{cve.cvss_score ?? '—'}</td>
+                                            <td>
+                                                <button className="btn btn-primary" style={{ padding: '4px 12px', fontSize: 12 }}
+                                                    onClick={() => handleGenerate(cve.cve_id)}
+                                                    disabled={generating === cve.cve_id}>
+                                                    {generating === cve.cve_id ? '⏳' : '📝'} Generate
+                                                </button>
+                                            </td>
+                                        </tr>
                                     ))}
-                                    {ka.cve_ids?.length > 5 && <span className="text-xs text-muted">+{ka.cve_ids.length - 5} more</span>}
-                                </div>
-                            </div>
-                            <div className="flex gap-8" onClick={e => e.stopPropagation()}>
-                                <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ka.id)}>🗑️</button>
-                            </div>
+                                </tbody>
+                            </table>
                         </div>
-                    </div>
-                ))}
-                {articles.length === 0 && (
-                    <div className="empty-state">
-                        <div className="empty-icon">📝</div>
-                        <h3>No Knowledge Articles</h3>
-                        <p className="text-muted">Create your first article from CVE data.</p>
-                    </div>
-                )}
+                    )}
+                </div>
             </div>
 
-            {/* Create Modal */}
-            {showModal && (
-                <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700 }}>
-                        <div className="modal-header">
-                            <h2 className="modal-title">New Knowledge Article</h2>
-                            <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
+            {/* Preview Modal */}
+            {showPreview && (
+                <div className="card mb-24">
+                    <div className="card-header">
+                        <div className="card-title">📄 Generated Report Preview</div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
+                                onClick={() => handleCopy(showPreview.content || showPreview.text_content || '')}>
+                                📋 Copy
+                            </button>
+                            {showPreview.id && (
+                                <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
+                                    onClick={() => handleExport(showPreview.id)}>
+                                    📄 Export
+                                </button>
+                            )}
+                            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
+                                onClick={() => setShowPreview(null)}>✕ Close</button>
                         </div>
-                        <div className="form-group">
-                            <label className="form-label">Title</label>
-                            <input className="form-input" placeholder="Article title..."
-                                value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">CVE IDs (press Enter)</label>
-                            <div className="tags-input">
-                                {form.cve_ids.map((id, i) => (
-                                    <span key={i} className="tag">{id}
-                                        <span className="tag-remove" onClick={() => setForm(f => ({ ...f, cve_ids: f.cve_ids.filter((_, j) => j !== i) }))}>✕</span>
-                                    </span>
-                                ))}
-                                <input placeholder="CVE-YYYY-NNNNN" value={cveInput}
-                                    onChange={e => setCveInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCVE(); } }} />
-                            </div>
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Content (leave empty for auto-generation)</label>
-                            <textarea className="form-textarea" placeholder="Markdown content (auto-generated if blank)..."
-                                style={{ minHeight: 150 }} value={form.content}
-                                onChange={e => setForm(f => ({ ...f, content: e.target.value }))} />
-                        </div>
-                        <div className="grid-2">
-                            <div className="form-group">
-                                <label className="form-label">Author</label>
-                                <input className="form-input" placeholder="Author name"
-                                    value={form.author} onChange={e => setForm(f => ({ ...f, author: e.target.value }))} />
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                            <button className="btn btn-primary" onClick={handleCreate}
-                                disabled={!form.title || form.cve_ids.length === 0}>+ Create Article</button>
+                    </div>
+                    <div style={{ padding: 20 }}>
+                        {showPreview.html_content ? (
+                            <div dangerouslySetInnerHTML={{ __html: showPreview.html_content }} />
+                        ) : (
+                            <pre style={{
+                                whiteSpace: 'pre-wrap', fontFamily: "'Inter', sans-serif", fontSize: 13,
+                                lineHeight: 1.6, color: 'var(--text-primary)',
+                            }}>
+                                {showPreview.content || showPreview.text_content}
+                            </pre>
+                        )}
+                        <div className="text-sm text-muted" style={{ marginTop: 12 }}>
+                            Method: {showPreview.generation_method || 'template'} |
+                            Status: {showPreview.status}
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Detail Modal */}
-            {selected && (
-                <div className="modal-overlay" onClick={() => setSelected(null)}>
-                    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 800, maxHeight: '90vh' }}>
-                        <div className="modal-header">
-                            <h2 className="modal-title">{selected.title}</h2>
-                            <button className="modal-close" onClick={() => setSelected(null)}>✕</button>
-                        </div>
-                        <div className="flex gap-8 mb-16">
-                            <span className={`badge ${selected.status === 'published' ? 'badge-success' : 'badge-info'}`}>{selected.status}</span>
-                            {selected.severity_assessment && (
-                                <span className={`badge badge-${selected.severity_assessment.toLowerCase()}`}>{selected.severity_assessment}</span>
-                            )}
-                        </div>
-                        <div className="mb-16">
-                            <span className="text-xs text-muted">CVEs</span>
-                            <div className="flex gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
-                                {(selected.cve_ids || []).map(id => <span key={id} className="tag">{id}</span>)}
-                            </div>
-                        </div>
-                        {selected.summary && <div className="mb-16"><span className="text-xs text-muted">Summary</span><p style={{ marginTop: 4 }}>{selected.summary}</p></div>}
-                        <div className="markdown-content mb-16" dangerouslySetInnerHTML={{
-                            __html: (selected.content || '').replace(/\n/g, '<br>').replace(/^# (.*)$/gm, '<h1>$1</h1>')
-                                .replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^---$/gm, '<hr>')
-                                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        }} />
-                        {selected.recommendations && (
-                            <div className="card" style={{ background: 'rgba(124,58,237,0.05)' }}>
-                                <h4 style={{ color: 'var(--purple-400)', marginBottom: 8 }}>Recommendations</h4>
-                                <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.7 }}>{selected.recommendations}</div>
-                            </div>
-                        )}
-                    </div>
+            {/* Existing KAs */}
+            <div className="card">
+                <div className="card-header">
+                    <div className="card-title">Saved Articles ({kas.length})</div>
                 </div>
-            )}
+                <div className="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>CVE IDs</th>
+                                <th>Status</th>
+                                <th>Author</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {kas.map(ka => (
+                                <tr key={ka.id}>
+                                    <td style={{ fontWeight: 600, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{ka.title}</td>
+                                    <td className="text-mono text-sm" style={{ color: 'var(--purple-400)' }}>
+                                        {(ka.cve_ids || []).join(', ')}
+                                    </td>
+                                    <td><span className={`badge ${ka.status === 'published' ? 'badge-success' : 'badge-warning'}`}>{ka.status}</span></td>
+                                    <td className="text-sm">{ka.author || '—'}</td>
+                                    <td className="text-sm text-muted">{ka.created_at ? new Date(ka.created_at).toLocaleDateString() : '—'}</td>
+                                    <td>
+                                        <div style={{ display: 'flex', gap: 6 }}>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
+                                                onClick={() => setShowPreview(ka)}>👁️</button>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
+                                                onClick={() => handleCopy(ka.content || '')}>📋</button>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
+                                                onClick={() => handleExport(ka.id)}>📄</button>
+                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                                                onClick={() => handleDelete(ka.id)}>🗑️</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {kas.length === 0 && (
+                                <tr><td colSpan="6" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
+                                    No knowledge articles yet. Search for a CVE and generate one.
+                                </td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     );
 }

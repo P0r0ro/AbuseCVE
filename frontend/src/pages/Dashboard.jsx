@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDashboardOverview, triggerScan, initializeDB, getTaskStatus } from '../api';
+import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus } from '../api';
 
 const severityColors = {
     CRITICAL: 'var(--critical)',
@@ -9,11 +9,19 @@ const severityColors = {
     UNKNOWN: 'var(--text-muted)',
 };
 
+const sourceColors = {
+    NVD: '#6366F1',
+    MITRE: '#F97316',
+    CISA_KEV: '#EF4444',
+    REDHAT: '#DC2626',
+};
+
 export default function Dashboard() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [scanStatus, setScanStatus] = useState('');
-    const [initVendor, setInitVendor] = useState('');
+    const [initMode, setInitMode] = useState('api'); // 'api' or 'local'
+    const [mitreDir, setMitreDir] = useState('');
 
     const fetchData = async () => {
         try {
@@ -39,10 +47,15 @@ export default function Dashboard() {
     };
 
     const handleInitDB = async () => {
-        setScanStatus('Initializing database...');
+        setScanStatus('Initializing database (full mirror from all sources)...');
         try {
-            const result = await initializeDB(initVendor);
-            setScanStatus(`DB init started: ${result.message}`);
+            if (initMode === 'local' && mitreDir) {
+                const result = await initializeDBLocal(mitreDir);
+                setScanStatus(`Local DB init started: ${result.message}`);
+            } else {
+                const result = await initializeDB();
+                setScanStatus(`DB init started: ${result.message}`);
+            }
         } catch (e) {
             setScanStatus(`Error: ${e.message}`);
         }
@@ -52,13 +65,14 @@ export default function Dashboard() {
 
     const sev = data?.severity_distribution || {};
     const maxSev = Math.max(...Object.values(sev), 1);
+    const sourceDist = data?.source_distribution || {};
 
     return (
         <div className="main-content animate-in">
             <div className="header" style={{ marginBottom: 24, padding: 0, background: 'transparent', border: 'none', height: 'auto' }}>
                 <div>
                     <h1 className="header-title">Dashboard</h1>
-                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Real-time CVE monitoring overview</p>
+                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Real-time CVE monitoring overview — 4 sources active</p>
                 </div>
                 <div className="header-actions">
                     <button className="btn btn-primary" onClick={handleScan}>🔍 Trigger Scan</button>
@@ -114,7 +128,7 @@ export default function Dashboard() {
                                         }}
                                     />
                                 </div>
-                                <div className="severity-bar-count">{sev[level] || 0}</div>
+                                <div className="severity-bar-count">{(sev[level] || 0).toLocaleString()}</div>
                             </div>
                         ))}
                     </div>
@@ -125,15 +139,58 @@ export default function Dashboard() {
                     <div className="card-header">
                         <div className="card-title">Database Initialization</div>
                     </div>
-                    <p className="text-sm text-muted mb-16">Pull all past CVEs for a vendor into the database for tracking.</p>
-                    <div className="form-group">
-                        <label className="form-label">Vendor Keyword (optional)</label>
-                        <input className="form-input" placeholder="e.g., fortinet, microsoft..."
-                            value={initVendor} onChange={e => setInitVendor(e.target.value)} />
+                    <p className="text-sm text-muted mb-16">
+                        Pull ALL past CVEs from NVD, MITRE, CISA KEV, and RedHat into the database.
+                    </p>
+
+                    <div className="form-group" style={{ marginBottom: 12 }}>
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                <input type="radio" name="initMode" checked={initMode === 'api'} onChange={() => setInitMode('api')} />
+                                <span className="text-sm">Via API (slow)</span>
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                <input type="radio" name="initMode" checked={initMode === 'local'} onChange={() => setInitMode('local')} />
+                                <span className="text-sm">Local Directory (fast)</span>
+                            </label>
+                        </div>
+
+                        {initMode === 'local' && (
+                            <div className="form-group">
+                                <label className="form-label">MITRE cvelistV5 Path</label>
+                                <input className="form-input" placeholder="/path/to/cvelistV5/cves"
+                                    value={mitreDir} onChange={e => setMitreDir(e.target.value)} />
+                                <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+                                    git clone https://github.com/CVEProject/cvelistV5.git
+                                </p>
+                            </div>
+                        )}
                     </div>
-                    <button className="btn btn-primary" onClick={handleInitDB}>🗄️ Initialize Database</button>
+
+                    <button className="btn btn-primary" onClick={handleInitDB}>🗄️ Initialize Full Database</button>
                 </div>
             </div>
+
+            {/* Source Distribution */}
+            {Object.keys(sourceDist).length > 0 && (
+                <div className="card mb-24">
+                    <div className="card-header">
+                        <div className="card-title">CVEs by Source</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '0 20px 20px' }}>
+                        {Object.entries(sourceDist).map(([source, count]) => (
+                            <div key={source} style={{
+                                padding: '12px 20px', borderRadius: 8,
+                                background: 'rgba(124,58,237,0.1)',
+                                border: `1px solid ${sourceColors[source] || '#666'}40`,
+                            }}>
+                                <div style={{ color: sourceColors[source] || '#888', fontWeight: 'bold', fontSize: 14 }}>{source}</div>
+                                <div className="text-mono" style={{ fontSize: 20, fontWeight: 700 }}>{count.toLocaleString()}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Recent CVEs */}
             <div className="card mb-24">
@@ -149,6 +206,7 @@ export default function Dashboard() {
                                 <th>Product</th>
                                 <th>Severity</th>
                                 <th>CVSS</th>
+                                <th>Source</th>
                                 <th>KEV</th>
                                 <th>First Seen</th>
                             </tr>
@@ -161,12 +219,21 @@ export default function Dashboard() {
                                     <td>{cve.product || '—'}</td>
                                     <td><span className={`badge badge-${(cve.severity || 'unknown').toLowerCase()}`}>{cve.severity || 'N/A'}</span></td>
                                     <td className="text-mono">{cve.cvss_score ?? '—'}</td>
+                                    <td>
+                                        <span style={{
+                                            fontSize: 11, padding: '2px 6px', borderRadius: 4,
+                                            background: `${sourceColors[cve.source] || '#666'}20`,
+                                            color: sourceColors[cve.source] || '#888',
+                                        }}>
+                                            {cve.source || '—'}
+                                        </span>
+                                    </td>
                                     <td>{cve.kev_flag ? <span className="badge badge-kev">⚠ KEV</span> : '—'}</td>
                                     <td className="text-sm text-muted">{cve.first_seen ? new Date(cve.first_seen).toLocaleDateString() : '—'}</td>
                                 </tr>
                             ))}
                             {(!data?.recent_cves || data.recent_cves.length === 0) && (
-                                <tr><td colSpan="7" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No CVEs yet. Create filters and run a scan to get started.</td></tr>
+                                <tr><td colSpan="8" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No CVEs yet. Initialize the database to get started.</td></tr>
                             )}
                         </tbody>
                     </table>

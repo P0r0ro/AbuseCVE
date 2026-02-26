@@ -73,17 +73,29 @@ class NVDSource(BaseCVESource):
         severity = None
         cvss_score = None
         cvss_vector = None
+        cvss_scores = {}
         metrics = cve_data.get("metrics", {})
 
+        version_map = {"cvssMetricV31": "3.1", "cvssMetricV30": "3.0", "cvssMetricV2": "2.0"}
         for version_key in ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"]:
             metric_list = metrics.get(version_key, [])
             if metric_list:
                 primary = metric_list[0]
                 cvss_data = primary.get("cvssData", {})
-                cvss_score = cvss_data.get("baseScore")
-                cvss_vector = cvss_data.get("vectorString")
-                severity = primary.get("baseSeverity") or cvss_data.get("baseSeverity")
-                break
+                score = cvss_data.get("baseScore")
+                vector = cvss_data.get("vectorString")
+                sev = primary.get("baseSeverity") or cvss_data.get("baseSeverity")
+                source_name = primary.get("source", "NVD")
+                cvss_scores[source_name] = {
+                    "score": score,
+                    "vector": vector,
+                    "version": version_map[version_key],
+                    "severity": sev.upper() if sev else None,
+                }
+                if cvss_score is None:
+                    cvss_score = score
+                    cvss_vector = vector
+                    severity = sev
 
         if severity:
             severity = severity.upper()
@@ -119,6 +131,14 @@ class NVDSource(BaseCVESource):
         pub_date = datetime.fromisoformat(published.replace("Z", "+00:00")) if published else None
         mod_date = datetime.fromisoformat(modified.replace("Z", "+00:00")) if modified else None
 
+        # Weaknesses (CWE)
+        weaknesses = []
+        for weakness in cve_data.get("weaknesses", []):
+            for desc in weakness.get("description", []):
+                val = desc.get("value", "")
+                if val.startswith("CWE-"):
+                    weaknesses.append(val)
+
         return NormalizedCVE(
             cve_id=cve_id,
             vendor=vendor,
@@ -134,6 +154,8 @@ class NVDSource(BaseCVESource):
             cpe_names=cpe_names,
             references=references,
             raw_json=cve_data,
+            cvss_scores=cvss_scores,
+            weaknesses=weaknesses,
         )
 
     async def _fetch_page(
