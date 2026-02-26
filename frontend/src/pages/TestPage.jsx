@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { testSMTP, testFetch, testFilter, testPipeline, testFullChain } from '../api';
+import { testSMTP, testFetch, testFilterEndpoint as testFilter, testPipeline, testFullChain } from '../api';
 
 const STEPS = [
     { key: 'smtp', label: 'SMTP Connection', icon: '📧', fn: testSMTP, description: 'Verify SMTP server connectivity and send test email' },
