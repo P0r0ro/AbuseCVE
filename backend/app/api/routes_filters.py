@@ -52,20 +52,31 @@ class FilterRuleUpdate(BaseModel):
     conditions: Optional[Dict[str, Any]] = None
 
 
+class TestFilterRequest(BaseModel):
+    """Test a filter rule against current DB."""
+    name: str = "Test Rule"
+    vendor: Optional[str] = None
+    products: List[str] = []
+    min_cvss: Optional[float] = None
+    max_cvss: Optional[float] = None
+    severity_filter: List[str] = []
+    keywords_include: List[str] = []
+    keywords_exclude: List[str] = []
+    cpe_vendor: Optional[str] = None
+    alert_on_modified: bool = False
+    conditions: Optional[Dict[str, Any]] = None
+    send_test_alert: bool = False
+
+
+# ══════════════════════════════════════════════════════════
+# STATIC ROUTES — must be defined BEFORE /{filter_id}
+# ══════════════════════════════════════════════════════════
+
 @router.get("")
 async def list_filters(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(FilterRule).order_by(FilterRule.created_at.desc()))
     filters = result.scalars().all()
     return [f.to_dict() for f in filters]
-
-
-@router.get("/{filter_id}")
-async def get_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
-    rule = result.scalar_one_or_none()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Filter rule not found")
-    return rule.to_dict()
 
 
 @router.post("", status_code=201)
@@ -90,59 +101,60 @@ async def create_filter(data: FilterRuleCreate, db: AsyncSession = Depends(get_d
     return rule.to_dict()
 
 
-@router.put("/{filter_id}")
-async def update_filter(filter_id: int, data: FilterRuleUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
-    rule = result.scalar_one_or_none()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Filter rule not found")
-
-    update_data = data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(rule, key, value)
-
-    await db.flush()
-    return rule.to_dict()
-
-
-@router.delete("/{filter_id}")
-async def delete_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
-    rule = result.scalar_one_or_none()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Filter rule not found")
-    await db.delete(rule)
-    return {"message": "Filter rule deleted"}
-
-
-@router.post("/{filter_id}/toggle")
-async def toggle_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
-    rule = result.scalar_one_or_none()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Filter rule not found")
-    rule.enabled = not rule.enabled
-    await db.flush()
-    return rule.to_dict()
+# ── Query Language Help ──────────────────────────────────
+@router.get("/query-help")
+async def get_query_help():
+    """Return query language documentation."""
+    return {
+        "operators": [
+            {"name": "equal", "description": "Exact match (case-insensitive). Supports * and ? wildcards.", "example": '{"field": "vendor", "operator": "equal", "value": "forti*"}'},
+            {"name": "not_equal", "description": "Not equal (case-insensitive). Supports * and ? wildcards.", "example": '{"field": "vendor", "operator": "not_equal", "value": "microsoft"}'},
+            {"name": "contains", "description": "Substring match. ? wildcard allowed, * NOT allowed.", "example": '{"field": "description", "operator": "contains", "value": "buffer overflow"}'},
+            {"name": "not_contains", "description": "Substring exclusion. ? wildcard allowed, * NOT allowed.", "example": '{"field": "description", "operator": "not_contains", "value": "low risk"}'},
+            {"name": "blank", "description": "Field is null or empty string.", "example": '{"field": "cvss_score", "operator": "blank"}'},
+            {"name": "not_blank", "description": "Field has a non-empty value.", "example": '{"field": "cvss_score", "operator": "not_blank"}'},
+            {"name": "starts_with", "description": "Value starts with pattern. Supports wildcards.", "example": '{"field": "cve_id", "operator": "starts_with", "value": "CVE-2024"}'},
+            {"name": "ends_with", "description": "Value ends with pattern. Supports wildcards.", "example": '{"field": "vendor", "operator": "ends_with", "value": "net"}'},
+            {"name": "not_starts_with", "description": "Value does NOT start with pattern.", "example": '{"field": "cve_id", "operator": "not_starts_with", "value": "CVE-2020"}'},
+            {"name": "not_ends_with", "description": "Value does NOT end with pattern.", "example": '{"field": "product", "operator": "not_ends_with", "value": "legacy"}'},
+            {"name": "regex", "description": "PCRE2-compatible regular expression match.", "example": '{"field": "description", "operator": "regex", "value": "(?i)remote\\\\s+code\\\\s+execution"}'},
+            {"name": "gte", "description": "Greater than or equal (numeric).", "example": '{"field": "cvss_score", "operator": "gte", "value": 7.0}'},
+            {"name": "lte", "description": "Less than or equal (numeric).", "example": '{"field": "cvss_score", "operator": "lte", "value": 9.0}'},
+            {"name": "gt", "description": "Greater than (numeric).", "example": '{"field": "cvss_score", "operator": "gt", "value": 8.0}'},
+            {"name": "lt", "description": "Less than (numeric).", "example": '{"field": "cvss_score", "operator": "lt", "value": 4.0}'},
+            {"name": "similarity", "description": "Fuzzy string similarity match (0.0-1.0 threshold).", "example": '{"field": "vendor", "operator": "similarity", "value": "fortnet"}'},
+        ],
+        "wildcards": {
+            "*": "Matches any number of characters. Available for: equal, not_equal, starts_with, ends_with, not_starts_with, not_ends_with. NOT available for contains/not_contains.",
+            "?": "Matches exactly one character. Examples: p?ul matches paul/poul. Available for ALL operators.",
+        },
+        "nesting": {
+            "description": "Combine conditions with AND/OR/NOT logic to any depth.",
+            "example": {
+                "logic": "AND",
+                "conditions": [
+                    {"field": "vendor", "operator": "contains", "value": "forti"},
+                    {
+                        "logic": "OR",
+                        "conditions": [
+                            {"field": "severity", "operator": "equal", "value": "CRITICAL"},
+                            {"field": "cvss_score", "operator": "gte", "value": 9.0},
+                        ],
+                    },
+                ],
+            },
+        },
+        "fields": [
+            "cve_id", "vendor", "product", "description", "severity",
+            "cvss_score", "cvss_vector", "source", "sources",
+            "published_date", "modified_date", "kev_flag",
+            "cpe_names", "references", "weaknesses", "affected_products",
+        ],
+        "case_sensitivity": "All operators are case-insensitive by default. Set 'case_sensitive': true for exact case matching.",
+    }
 
 
 # ── Test Filter ──────────────────────────────────────────
-class TestFilterRequest(BaseModel):
-    """Test a filter rule against current DB."""
-    name: str = "Test Rule"
-    vendor: Optional[str] = None
-    products: List[str] = []
-    min_cvss: Optional[float] = None
-    max_cvss: Optional[float] = None
-    severity_filter: List[str] = []
-    keywords_include: List[str] = []
-    keywords_exclude: List[str] = []
-    cpe_vendor: Optional[str] = None
-    alert_on_modified: bool = False
-    conditions: Optional[Dict[str, Any]] = None
-    send_test_alert: bool = False
-
-
 @router.post("/test")
 async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(get_db)):
     """Test a filter rule against the database and optionally send a test alert."""
@@ -242,7 +254,7 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
     }
 
 
-# ── YAML Import/Export ───────────────────────────────────
+# ── YAML Export ──────────────────────────────────────────
 @router.get("/export/yaml")
 async def export_filters_yaml(db: AsyncSession = Depends(get_db)):
     """Export all filter rules as a YAML file."""
@@ -252,7 +264,6 @@ async def export_filters_yaml(db: AsyncSession = Depends(get_db)):
         # Fallback to JSON-based YAML-like format
         result = await db.execute(select(FilterRule).order_by(FilterRule.created_at.desc()))
         rules = [r.to_dict() for r in result.scalars().all()]
-        # Remove DB-specific fields
         for rule in rules:
             rule.pop("id", None)
             rule.pop("created_at", None)
@@ -287,6 +298,7 @@ async def export_filters_yaml(db: AsyncSession = Depends(get_db)):
     )
 
 
+# ── YAML Import ──────────────────────────────────────────
 @router.post("/import/yaml")
 async def import_filters_yaml(
     file: UploadFile = File(...),
@@ -356,54 +368,50 @@ async def import_filters_yaml(
     }
 
 
-# ── Query Language Help ──────────────────────────────────
-@router.get("/query-help")
-async def get_query_help():
-    """Return query language documentation."""
-    return {
-        "operators": [
-            {"name": "equal", "description": "Exact match (case-insensitive). Supports * and ? wildcards.", "example": '{"field": "vendor", "operator": "equal", "value": "forti*"}'},
-            {"name": "not_equal", "description": "Not equal (case-insensitive). Supports * and ? wildcards.", "example": '{"field": "vendor", "operator": "not_equal", "value": "microsoft"}'},
-            {"name": "contains", "description": "Substring match. ? wildcard allowed, * NOT allowed.", "example": '{"field": "description", "operator": "contains", "value": "buffer overflow"}'},
-            {"name": "not_contains", "description": "Substring exclusion. ? wildcard allowed, * NOT allowed.", "example": '{"field": "description", "operator": "not_contains", "value": "low risk"}'},
-            {"name": "blank", "description": "Field is null or empty string.", "example": '{"field": "cvss_score", "operator": "blank"}'},
-            {"name": "not_blank", "description": "Field has a non-empty value.", "example": '{"field": "cvss_score", "operator": "not_blank"}'},
-            {"name": "starts_with", "description": "Value starts with pattern. Supports wildcards.", "example": '{"field": "cve_id", "operator": "starts_with", "value": "CVE-2024"}'},
-            {"name": "ends_with", "description": "Value ends with pattern. Supports wildcards.", "example": '{"field": "vendor", "operator": "ends_with", "value": "net"}'},
-            {"name": "not_starts_with", "description": "Value does NOT start with pattern.", "example": '{"field": "cve_id", "operator": "not_starts_with", "value": "CVE-2020"}'},
-            {"name": "not_ends_with", "description": "Value does NOT end with pattern.", "example": '{"field": "product", "operator": "not_ends_with", "value": "legacy"}'},
-            {"name": "regex", "description": "PCRE2-compatible regular expression match.", "example": '{"field": "description", "operator": "regex", "value": "(?i)remote\\\\s+code\\\\s+execution"}'},
-            {"name": "gte", "description": "Greater than or equal (numeric).", "example": '{"field": "cvss_score", "operator": "gte", "value": 7.0}'},
-            {"name": "lte", "description": "Less than or equal (numeric).", "example": '{"field": "cvss_score", "operator": "lte", "value": 9.0}'},
-            {"name": "gt", "description": "Greater than (numeric).", "example": '{"field": "cvss_score", "operator": "gt", "value": 8.0}'},
-            {"name": "lt", "description": "Less than (numeric).", "example": '{"field": "cvss_score", "operator": "lt", "value": 4.0}'},
-            {"name": "similarity", "description": "Fuzzy string similarity match (0.0-1.0 threshold).", "example": '{"field": "vendor", "operator": "similarity", "value": "fortnet"}'},
-        ],
-        "wildcards": {
-            "*": "Matches any number of characters. Available for: equal, not_equal, starts_with, ends_with, not_starts_with, not_ends_with. NOT available for contains/not_contains.",
-            "?": "Matches exactly one character. Examples: p?ul matches paul/poul. Available for ALL operators.",
-        },
-        "nesting": {
-            "description": "Combine conditions with AND/OR/NOT logic to any depth.",
-            "example": {
-                "logic": "AND",
-                "conditions": [
-                    {"field": "vendor", "operator": "contains", "value": "forti"},
-                    {
-                        "logic": "OR",
-                        "conditions": [
-                            {"field": "severity", "operator": "equal", "value": "CRITICAL"},
-                            {"field": "cvss_score", "operator": "gte", "value": 9.0},
-                        ],
-                    },
-                ],
-            },
-        },
-        "fields": [
-            "cve_id", "vendor", "product", "description", "severity",
-            "cvss_score", "cvss_vector", "source", "sources",
-            "published_date", "modified_date", "kev_flag",
-            "cpe_names", "references", "weaknesses", "affected_products",
-        ],
-        "case_sensitivity": "All operators are case-insensitive by default. Set 'case_sensitive': true for exact case matching.",
-    }
+# ══════════════════════════════════════════════════════════
+# PARAMETERIZED ROUTES — must be AFTER all static routes
+# ══════════════════════════════════════════════════════════
+
+@router.get("/{filter_id}")
+async def get_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Filter rule not found")
+    return rule.to_dict()
+
+
+@router.put("/{filter_id}")
+async def update_filter(filter_id: int, data: FilterRuleUpdate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Filter rule not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(rule, key, value)
+    await db.flush()
+    return rule.to_dict()
+
+
+@router.delete("/{filter_id}")
+async def delete_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Filter rule not found")
+    await db.delete(rule)
+    await db.flush()
+    return {"message": "Filter rule deleted"}
+
+
+@router.post("/{filter_id}/toggle")
+async def toggle_filter(filter_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(FilterRule).where(FilterRule.id == filter_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Filter rule not found")
+    rule.enabled = not rule.enabled
+    await db.flush()
+    return rule.to_dict()

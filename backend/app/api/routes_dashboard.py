@@ -123,3 +123,52 @@ async def get_task_status(task_id: str):
         "status": result.status,
         "result": result.result if result.ready() else None,
     }
+
+
+class ClearDataRequest(BaseModel):
+    clear_alerts: bool = True
+    clear_health_reports: bool = True
+    clear_cves: bool = False
+    clear_knowledge_articles: bool = False
+
+
+@router.post("/clear-data")
+async def clear_old_data(data: ClearDataRequest, db: AsyncSession = Depends(get_db)):
+    """Clear old data from the database while preserving filter rules and config.
+
+    Use this for a clean start after updates without losing your filter rules.
+    """
+    from sqlalchemy import delete as sql_delete
+    cleared = []
+
+    if data.clear_alerts:
+        await db.execute(sql_delete(AlertLog))
+        cleared.append("alerts")
+
+    if data.clear_health_reports:
+        try:
+            from app.models.health_report import HealthReport
+            await db.execute(sql_delete(HealthReport))
+            cleared.append("health_reports")
+        except Exception:
+            cleared.append("health_reports (skipped — table may not exist)")
+
+    if data.clear_cves:
+        await db.execute(sql_delete(CVE))
+        cleared.append("cves")
+
+    if data.clear_knowledge_articles:
+        try:
+            from app.models.knowledge_article import KnowledgeArticle
+            await db.execute(sql_delete(KnowledgeArticle))
+            cleared.append("knowledge_articles")
+        except Exception:
+            cleared.append("knowledge_articles (skipped)")
+
+    await db.commit()
+
+    return {
+        "message": f"Cleared: {', '.join(cleared)}",
+        "cleared": cleared,
+    }
+
