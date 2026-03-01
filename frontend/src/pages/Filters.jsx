@@ -389,34 +389,35 @@ export default function Filters() {
                             )}
                         </div>
 
-                        {/* Severity Filter (checkboxes for multi-select) */}
-                        <div className="form-group">
-                            <label className="form-label">Severity Filter</label>
-                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                {SEVERITIES.map(sev => (
-                                    <label key={sev} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                        <input type="checkbox" checked={(form.severity_filter || []).includes(sev)}
-                                            onChange={() => toggleSeverity(sev)}
-                                            style={{ accentColor: 'var(--purple-400)' }} />
-                                        <span className={`badge badge-${sev.toLowerCase()}`}>{sev}</span>
-                                    </label>
-                                ))}
+                        {/* Custom Severity via CVSS Range */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                            <label className="form-label">Custom Severity Level (CVSS Score Range)</label>
+                            <p className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                                Set the minimum/maximum CVSS score to define what counts as a relevant severity.
+                                For conditions-based rules, CVSS constraints are embedded directly in the conditions block.
+                            </p>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <label className="text-sm" style={{ minWidth: 30 }}>Min</label>
+                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="0.0"
+                                    value={form.min_cvss} onChange={e => setForm(f => ({ ...f, min_cvss: e.target.value }))}
+                                    style={{ width: 90 }} />
+                                <span className="text-muted">–</span>
+                                <label className="text-sm" style={{ minWidth: 30 }}>Max</label>
+                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="10.0"
+                                    value={form.max_cvss} onChange={e => setForm(f => ({ ...f, max_cvss: e.target.value }))}
+                                    style={{ width: 90 }} />
+                                <span className="badge badge-info" style={{ marginLeft: 8 }}>
+                                    {form.min_cvss || '0'} – {form.max_cvss || '10'} CVSS
+                                </span>
                             </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
+                                <input type="checkbox" checked={form.include_unknown}
+                                    onChange={e => setForm(f => ({ ...f, include_unknown: e.target.checked }))}
+                                    style={{ accentColor: 'var(--purple-400)' }} />
+                                <span className="text-sm">Include CVEs with no CVSS score (unrated/unknown)</span>
+                            </label>
                         </div>
 
-                        {/* CVSS Range */}
-                        <div className="form-group">
-                            <label className="form-label">CVSS Score Range</label>
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="Min"
-                                    value={form.min_cvss} onChange={e => setForm(f => ({ ...f, min_cvss: e.target.value }))}
-                                    style={{ width: 100 }} />
-                                <span className="text-muted">to</span>
-                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="Max"
-                                    value={form.max_cvss} onChange={e => setForm(f => ({ ...f, max_cvss: e.target.value }))}
-                                    style={{ width: 100 }} />
-                            </div>
-                        </div>
 
                         {/* Alert on Modified / Updated CVE */}
                         <div className="form-group" style={{ gridColumn: 'span 2' }}>

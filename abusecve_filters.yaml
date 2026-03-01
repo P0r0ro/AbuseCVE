@@ -1,7 +1,10 @@
 filter_rules:
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # FORTINET — EDR / Mail / Guard / Analyzer
+  # FORTINET — FortiEDR / FortiMail / FortiGuard / FortiAnalyzer
+  #
+  # Severity: CVSS ≥ 3.0 (embedded in conditions, no legacy severity_filter)
+  # Catches all version variants via regex OR across all relevant fields.
   # ═══════════════════════════════════════════════════════════════════════════
   - name: "Fortinet - FortiEDR / FortiMail / FortiGuard / FortiAnalyzer"
     vendor: "fortinet"
@@ -9,20 +12,27 @@ filter_rules:
     enabled: true
     min_cvss: 3.0
     max_cvss: 10.0
-    severity_filter:
-      - "CRITICAL"
-      - "HIGH"
-      - "MEDIUM"
+    severity_filter: []
     include_unknown: true
     keywords_include: []
     keywords_exclude: []
     alert_on_modified: true
     description: >
       Monitors Fortinet EDR, Mail, Guard, and Analyzer products across all
-      versions and aliases using regex OR conditions.
+      versions using regex OR conditions with CVSS >= 3.0 constraint embedded.
     conditions:
       logic: "AND"
       conditions:
+        # CVSS must be >= 3.0 OR unrated (include_unknown handled in legacy mode,
+        # but we add it here for conditions mode)
+        - logic: "OR"
+          conditions:
+            - field: "cvss_score"
+              operator: "gte"
+              value: 3.0
+            - field: "cvss_score"
+              operator: "blank"
+
         # Must be Fortinet-related (any field)
         - logic: "OR"
           conditions:
@@ -39,7 +49,7 @@ filter_rules:
               operator: "regex"
               value: "(?i)fortinet"
 
-        # Must mention at least one of the target products
+        # Must mention at least one target product
         - logic: "OR"
           conditions:
             - field: "description"
@@ -100,10 +110,7 @@ filter_rules:
     enabled: true
     min_cvss: 3.0
     max_cvss: 10.0
-    severity_filter:
-      - "CRITICAL"
-      - "HIGH"
-      - "MEDIUM"
+    severity_filter: []
     include_unknown: true
     keywords_include: []
     keywords_exclude:
@@ -113,10 +120,19 @@ filter_rules:
     alert_on_modified: true
     description: >
       Monitors all Wazuh CVEs (agent, manager, dashboard, API, indexer) across
-      all versions. Excludes third-party EDR plugin integration CVEs.
+      all versions. CVSS >= 3.0. Excludes third-party EDR plugin CVEs.
     conditions:
       logic: "AND"
       conditions:
+        # CVSS >= 3.0 OR unrated
+        - logic: "OR"
+          conditions:
+            - field: "cvss_score"
+              operator: "gte"
+              value: 3.0
+            - field: "cvss_score"
+              operator: "blank"
+
         # Must mention Wazuh in any field
         - logic: "OR"
           conditions:
@@ -135,6 +151,7 @@ filter_rules:
             - field: "affected_products"
               operator: "regex"
               value: "(?i)wazuh"
+
         # Exclude pure EDR plugin CVEs
         - field: "description"
           operator: "not_contains"
@@ -147,17 +164,15 @@ filter_rules:
           value: "edr_plugin"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # MICROSOFT — Azure / Sentinel / Exchange / Office365
+  # MICROSOFT — Azure / Sentinel / Exchange / Office 365
   # ═══════════════════════════════════════════════════════════════════════════
   - name: "Microsoft - Azure / Sentinel / Exchange / Office365"
     vendor: "microsoft"
     products: []
     enabled: true
-    min_cvss: 3.0
+    min_cvss: 7.0
     max_cvss: 10.0
-    severity_filter:
-      - "CRITICAL"
-      - "HIGH"
+    severity_filter: []
     include_unknown: false
     keywords_include: []
     keywords_exclude: []
@@ -165,10 +180,15 @@ filter_rules:
     description: >
       Monitors Microsoft Azure (all services, Entra ID, Arc, DevOps),
       Microsoft Sentinel, Exchange Server (all versions) and Exchange Online,
-      Office 365 / Microsoft 365. HIGH and CRITICAL only.
+      Office 365 / Microsoft 365. CVSS >= 7.0 (HIGH/CRITICAL only).
     conditions:
       logic: "AND"
       conditions:
+        # CVSS >= 7.0 (HIGH / CRITICAL only, no unrated)
+        - field: "cvss_score"
+          operator: "gte"
+          value: 7.0
+
         # Must be Microsoft-related
         - logic: "OR"
           conditions:
@@ -188,7 +208,7 @@ filter_rules:
         # Must mention one of the target product families
         - logic: "OR"
           conditions:
-            # Azure
+            # Azure (all services)
             - field: "description"
               operator: "regex"
               value: "(?i)\\bazure\\b"

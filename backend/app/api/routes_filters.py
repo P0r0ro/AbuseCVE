@@ -244,37 +244,42 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
             break
 
         for c in batch:
-            cve = NormalizedCVE(
-                cve_id=c.cve_id,
-                vendor=c.vendor,
-                product=c.product,
-                description=c.description,
-                severity=c.severity,
-                cvss_score=c.cvss_score,
-                cvss_vector=c.cvss_vector,
-                source=c.source,
-                sources=c.sources or [],
-                published_date=c.published_date,
-                modified_date=c.modified_date,
-                kev_flag=c.kev_flag,
-                cpe_names=c.cpe_names or [],
-                references=c.references or [],
-                weaknesses=c.weaknesses or [],
-                affected_products=c.affected_products or [],
-            )
-            match = match_cve_against_rule(cve, rule_dict)
-            if match:
-                matched_cves.append({
-                    "cve_id": c.cve_id,
-                    "vendor": c.vendor,
-                    "product": c.product,
-                    "severity": c.severity,
-                    "cvss_score": c.cvss_score,
-                    "source": c.source,
-                    "kev_flag": c.kev_flag,
-                    "description": (c.description or "")[:300],
-                    "published_date": c.published_date.isoformat() if c.published_date else None,
-                })
+            try:
+                cve = NormalizedCVE(
+                    cve_id=c.cve_id,
+                    vendor=c.vendor,
+                    product=c.product,
+                    description=c.description,
+                    severity=c.severity,
+                    cvss_score=c.cvss_score,
+                    cvss_vector=c.cvss_vector,
+                    source=c.source,
+                    sources=c.sources or [],
+                    published_date=c.published_date,
+                    modified_date=c.modified_date,
+                    kev_flag=c.kev_flag,
+                    cpe_names=c.cpe_names if isinstance(c.cpe_names, list) else [],
+                    references=c.references if isinstance(c.references, list) else [],
+                    weaknesses=c.weaknesses if isinstance(c.weaknesses, list) else [],
+                    affected_products=c.affected_products if isinstance(c.affected_products, list) else [],
+                )
+                match = match_cve_against_rule(cve, rule_dict)
+                if match:
+                    matched_cves.append({
+                        "cve_id": c.cve_id,
+                        "vendor": c.vendor,
+                        "product": c.product,
+                        "severity": c.severity,
+                        "cvss_score": c.cvss_score,
+                        "source": c.source,
+                        "kev_flag": c.kev_flag,
+                        "description": (c.description or "")[:300],
+                        "published_date": c.published_date.isoformat() if c.published_date else None,
+                    })
+            except Exception as cve_err:
+                logger.warning(f"Skipping CVE {getattr(c, 'cve_id', '?')} during filter test: {cve_err}")
+                continue
+
 
         offset += BATCH
         if len(batch) < BATCH:
