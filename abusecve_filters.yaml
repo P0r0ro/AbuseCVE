@@ -1,65 +1,261 @@
 filter_rules:
-  # ── Fortinet Critical Products ─────────────────────────
-  - name: "Fortinet Critical - EDR/Mail/Guard/Analyzer"
-    vendor: "fortinet"
-    products:
-      - "fortiedr"
-      - "fortimail"
-      - "fortiguard"
-      - "fortianalyzer"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FORTINET — EDR / Mail / Guard / Analyzer
+  #
+  # Strategy: OR across all product names and aliases in description, vendor,
+  # CPE names, and affected_products. Regex catches any version suffix.
+  # CVSS 3.0–10 (HIGH + CRITICAL + unscored/unknown included).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: "Fortinet - FortiEDR / FortiMail / FortiGuard / FortiAnalyzer"
     enabled: true
     min_cvss: 3.0
     max_cvss: 10.0
     severity_filter:
       - "CRITICAL"
-    keywords_include:
-      - "fortiedr"
-      - "fortimail"
-      - "fortiguard"
-      - "fortianalyzer"
-    keywords_exclude: []
-    alert_on_modified: true
-    description: "Monitor Fortinet critical products (FortiEDR, FortiMail, FortiGuard, FortiAnalyzer) across all versions. CVSS 3-10, alert on modifications."
-
-  # ── Wazuh (exclude EDR plugins) ────────────────────────
-  - name: "Wazuh - All (excl. EDR Plugins)"
-    vendor: "wazuh"
-    products:
-      - "wazuh"
-    enabled: true
-    min_cvss: 3.0
-    max_cvss: 10.0
-    severity_filter:
-      - "CRITICAL"
-    keywords_include:
-      - "wazuh"
-    keywords_exclude:
-      - "edr plugin"
-      - "edr-plugin"
-      - "edr_plugin"
-    alert_on_modified: true
-    description: "Monitor all Wazuh CVEs excluding EDR plugins. CVSS 3-10, alert on modifications."
-
-  # ── Microsoft Cloud & Collaboration ────────────────────
-  - name: "Microsoft - Azure/Sentinel/Exchange/O365"
-    vendor: "microsoft"
-    products:
-      - "azure"
-      - "sentinel"
-      - "exchange"
-      - "office365"
-      - "office 365"
-    enabled: true
-    min_cvss: 3.0
-    max_cvss: 10.0
-    severity_filter:
       - "HIGH"
-    keywords_include:
-      - "azure"
-      - "sentinel"
-      - "exchange"
-      - "office365"
-      - "office 365"
-    keywords_exclude: []
+      - "MEDIUM"
+    include_unknown: true
     alert_on_modified: true
-    description: "Monitor Microsoft cloud and collaboration products (Azure, Sentinel, Exchange, Office 365). CVSS 3-10, alert on modifications."
+    description: >
+      Monitors Fortinet EDR, Mail, Guard, and Analyzer products across all
+      versions and aliases, using regex OR conditions across description,
+      vendor, CPE, and affected_products fields.
+    conditions:
+      logic: "AND"
+      conditions:
+        # ── Must be Fortinet-related ────────────────────────────────────────
+        - logic: "OR"
+          conditions:
+            - field: "vendor"
+              operator: "regex"
+              value: "(?i)forti(net)?"
+            - field: "description"
+              operator: "regex"
+              value: "(?i)forti(net)?"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):fortinet:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)fortinet"
+
+        # ── Must mention one of the target products ─────────────────────────
+        - logic: "OR"
+          conditions:
+            # FortiEDR (also referenced as forti-edr, forti_edr in some advisories)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)forti[-_]?edr"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)forti[-_]?edr"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):forti_?edr:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)forti[-_]?edr"
+
+            # FortiMail (any version)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)forti[-_]?mail"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)forti[-_]?mail"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):forti_?mail:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)forti[-_]?mail"
+
+            # FortiGuard (service, labs, cloud)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)forti[-_]?guard"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)forti[-_]?guard"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):forti_?guard:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)forti[-_]?guard"
+
+            # FortiAnalyzer (any version)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)forti[-_]?analyzer"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)forti[-_]?analyzer"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):forti_?analyzer:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)forti[-_]?analyzer"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # WAZUH — All modules except EDR plugins
+  #
+  # Strategy: match any CVE mentioning Wazuh in any field, then exclude
+  # CVEs that specifically relate to third-party EDR plugin integrations only.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: "Wazuh - All (excl. EDR Plugins)"
+    enabled: true
+    min_cvss: 3.0
+    max_cvss: 10.0
+    severity_filter:
+      - "CRITICAL"
+      - "HIGH"
+      - "MEDIUM"
+    include_unknown: true
+    alert_on_modified: true
+    description: >
+      Monitors all Wazuh CVEs (agent, manager, dashboard, API, indexer, etc.)
+      across all versions. Excludes CVEs that are purely about third-party EDR
+      plugin integrations (not core Wazuh).
+    conditions:
+      logic: "AND"
+      conditions:
+        # ── Must mention Wazuh ──────────────────────────────────────────────
+        - logic: "OR"
+          conditions:
+            - field: "vendor"
+              operator: "regex"
+              value: "(?i)wazuh"
+            - field: "description"
+              operator: "regex"
+              value: "(?i)wazuh"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)wazuh"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):wazuh:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)wazuh"
+
+        # ── Exclude pure EDR plugin integration CVEs ────────────────────────
+        # (NOT a description that ONLY talks about an EDR plugin, not Wazuh core)
+        - field: "description"
+          operator: "not_contains"
+          value: "edr plugin"
+        - field: "description"
+          operator: "not_contains"
+          value: "edr-plugin"
+        - field: "description"
+          operator: "not_contains"
+          value: "edr_plugin"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MICROSOFT — Azure / Sentinel / Exchange / Office 365 / M365
+  #
+  # Strategy: OR across all product names and common aliases/abbreviations.
+  # Covers Azure AD (Entra ID), Azure Arc, Sentinel SIEM, all Exchange Server
+  # versions, Office 365, Microsoft 365, Teams (used in these products), etc.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: "Microsoft - Azure / Sentinel / Exchange / Office365"
+    enabled: true
+    min_cvss: 3.0
+    max_cvss: 10.0
+    severity_filter:
+      - "CRITICAL"
+      - "HIGH"
+    include_unknown: false
+    alert_on_modified: true
+    description: >
+      Monitors Microsoft cloud and collaboration products: Azure (all services,
+      Azure AD/Entra ID, Azure Arc, Azure DevOps, etc.), Microsoft Sentinel,
+      Exchange Server (all versions), Office 365 / Microsoft 365.
+      CVSS 3+, HIGH and CRITICAL only.
+    conditions:
+      logic: "AND"
+      conditions:
+        # ── Must be Microsoft-related ───────────────────────────────────────
+        - logic: "OR"
+          conditions:
+            - field: "vendor"
+              operator: "regex"
+              value: "(?i)microsoft"
+            - field: "description"
+              operator: "regex"
+              value: "(?i)microsoft"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):microsoft:"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)microsoft"
+
+        # ── Must mention one of the target product families ─────────────────
+        - logic: "OR"
+          conditions:
+            # Azure (all services — AD, Arc, DevOps, Container, Functions, etc.)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)\\bazure\\b"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)\\bazure\\b"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):azure"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)\\bazure\\b"
+
+            # Entra ID (new name for Azure Active Directory)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)entra\\s+(id|external|workload)"
+            - field: "description"
+              operator: "regex"
+              value: "(?i)azure\\s+active\\s+directory|azure\\s+ad\\b"
+
+            # Microsoft Sentinel (formerly Azure Sentinel)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)microsoft\\s+sentinel|azure\\s+sentinel"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)sentinel"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):sentinel"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)sentinel"
+
+            # Exchange Server (2010, 2013, 2016, 2019, Online)
+            - field: "description"
+              operator: "regex"
+              value: "(?i)microsoft\\s+exchange|exchange\\s+(server|online)"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)exchange"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):exchange"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)exchange"
+
+            # Office 365 / Microsoft 365 / M365
+            - field: "description"
+              operator: "regex"
+              value: "(?i)(office|microsoft)\\s*365|m365|office\\s+365"
+            - field: "product"
+              operator: "regex"
+              value: "(?i)(office|microsoft)[_\\s-]?365"
+            - field: "cpe_names"
+              operator: "regex"
+              value: "(?i):(office|microsoft)_365|:office365"
+            - field: "affected_products"
+              operator: "regex"
+              value: "(?i)(office|microsoft)[_\\s-]?365"
