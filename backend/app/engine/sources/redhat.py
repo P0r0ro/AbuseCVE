@@ -1,6 +1,6 @@
 """RedHat Security Data API connector.
 
-API docs: https://access.redhat.com/labs/securitydataapi/
+API docs: https://access.redhat.com/hydra/rest/securitydata
 Endpoints:
   - GET /cve.json — list CVEs with filtering
   - GET /cve/{CVE-ID}.json — CVE detail
@@ -19,7 +19,7 @@ from app.engine.sources.base import BaseCVESource, NormalizedCVE
 
 logger = logging.getLogger(__name__)
 
-REDHAT_API = "https://access.redhat.com/labs/securitydataapi"
+REDHAT_API = "https://access.redhat.com/hydra/rest/securitydata"
 PAGE_SIZE = 1000  # RedHat API max per_page
 
 
