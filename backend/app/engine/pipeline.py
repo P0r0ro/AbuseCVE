@@ -258,13 +258,16 @@ class CVEPipeline:
         self,
         session: AsyncSession,
     ) -> Dict[str, Any]:
-        """Bulk-import ALL past CVEs from all 4 sources into the database.
+        """Bulk-import past CVEs from NVD, CISA KEV, and RedHat into the database.
+
+        NOTE: MITRE is excluded from API-based init (requires git clone which
+        is unreliable). Use the file-upload mechanism for MITRE data instead.
 
         Uses streaming batch processing to avoid OOM:
         - NVD: streamed in pages of 2000, committed per page
-        - Others: fetched then batch-committed in chunks of 5000
+        - KEV + RedHat: fetched then batch-committed in chunks of 5000
         """
-        logger.info("DB Init: Starting full bulk import from all sources")
+        logger.info("DB Init: Starting bulk import from NVD + CISA KEV + RedHat (MITRE excluded)")
 
         total_new = 0
         total_existing = 0
@@ -302,26 +305,7 @@ class CVEPipeline:
             logger.error(f"DB Init NVD failed at {nvd_total} CVEs: {e}", exc_info=True)
             source_stats["NVD"] = f"{nvd_total} (partial, error: {e})"
 
-        # 3. MITRE CVEListV5 — fetch then batch-commit
-        try:
-            mitre_cves = await self.mitre.fetch_all()
-            batch_size = 5000
-            mitre_new = 0
-            for i in range(0, len(mitre_cves), batch_size):
-                chunk = mitre_cves[i:i + batch_size]
-                new, existing = await dedup_and_store_bulk(session, chunk)
-                await session.commit()
-                mitre_new += len(new)
-                total_new += len(new)
-                total_existing += existing
-                logger.info(f"DB Init MITRE batch {i // batch_size + 1}: {len(new)} new")
-            del mitre_cves  # Free memory
-            source_stats["MITRE"] = mitre_new
-            logger.info(f"DB Init: MITRE complete → {mitre_new} new")
-        except Exception as e:
-            logger.error(f"DB Init MITRE failed: {e}", exc_info=True)
-
-        # 4. RedHat — fetch then batch-commit
+        # 3. RedHat — fetch then batch-commit
         try:
             redhat_cves = await self.redhat.fetch_all()
             batch_size = 5000
@@ -344,6 +328,69 @@ class CVEPipeline:
             "total_new": total_new,
             "already_existed": total_existing,
             "sources": source_stats,
+        }
+
+    async def initialize_db_from_upload(
+        self,
+        session: AsyncSession,
+        file_path: str,
+    ) -> Dict[str, Any]:
+        """Import MITRE CVE data from an uploaded file (ZIP or directory).
+
+        The user downloads cvelistV5 manually, then uploads it through the UI.
+        """
+        import os
+        import zipfile
+        import tempfile
+
+        logger.info(f"DB Init Upload: Processing uploaded file {file_path}")
+
+        mitre_dir = file_path
+
+        # If it's a ZIP file, extract it first
+        if zipfile.is_zipfile(file_path):
+            extract_dir = tempfile.mkdtemp(prefix="abusecve_mitre_")
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                zf.extractall(extract_dir)
+            logger.info(f"DB Init Upload: Extracted ZIP to {extract_dir}")
+            # Look for cves/ directory
+            for root, dirs, files in os.walk(extract_dir):
+                if 'cves' in dirs:
+                    mitre_dir = os.path.join(root, 'cves')
+                    break
+                # Check if JSON files directly in root
+                if any(f.endswith('.json') for f in files):
+                    mitre_dir = root
+                    break
+            else:
+                mitre_dir = extract_dir
+
+        if not os.path.isdir(mitre_dir):
+            raise ValueError(f"Could not find CVE data directory in uploaded file: {file_path}")
+
+        logger.info(f"DB Init Upload: Parsing MITRE CVEs from {mitre_dir}")
+        mitre_cves = self.mitre.parse_from_directory(mitre_dir)
+        logger.info(f"DB Init Upload: Parsed {len(mitre_cves)} CVEs from MITRE data")
+
+        # Process in batches
+        batch_size = 5000
+        total_new = 0
+        total_existing = 0
+        for i in range(0, len(mitre_cves), batch_size):
+            batch = mitre_cves[i:i + batch_size]
+            new_cves, existing = await dedup_and_store_bulk(session, batch)
+            total_new += len(new_cves)
+            total_existing += existing
+            await session.commit()
+            logger.info(
+                f"DB Init Upload batch {i // batch_size + 1}: "
+                f"{len(new_cves)} new, {existing} existing"
+            )
+
+        return {
+            "total_parsed": len(mitre_cves),
+            "new_stored": total_new,
+            "already_existed": total_existing,
         }
 
     async def initialize_db_from_directory(

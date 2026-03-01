@@ -32,6 +32,9 @@ export default function Filters() {
         description: '',
         alert_on_modified: false,
         conditions: null,
+        severity_mapping: null,
+        include_unknown: false,
+        pql_query: '',
     });
     const [productInput, setProductInput] = useState('');
     const [kwIncludeInput, setKwIncludeInput] = useState('');
@@ -56,6 +59,7 @@ export default function Filters() {
             min_cvss: '', max_cvss: '', severity_filter: [],
             keywords_include: [], keywords_exclude: [], cpe_vendor: '',
             description: '', alert_on_modified: false, conditions: null,
+            severity_mapping: null, include_unknown: false, pql_query: '',
         });
         setProductInput('');
         setKwIncludeInput('');
@@ -79,6 +83,9 @@ export default function Filters() {
             description: filter.description || '',
             alert_on_modified: filter.alert_on_modified || false,
             conditions: filter.conditions || null,
+            severity_mapping: filter.severity_mapping || null,
+            include_unknown: filter.include_unknown || false,
+            pql_query: filter.pql_query || '',
         });
         setEditId(filter.id);
         setShowEditor(true);
@@ -92,6 +99,9 @@ export default function Filters() {
             max_cvss: form.max_cvss !== '' ? parseFloat(form.max_cvss) : null,
             // Merge products into keywords_include (products become default include keywords)
             keywords_include: [...new Set([...form.keywords_include, ...form.products.filter(p => !form.keywords_include.includes(p))])],
+            severity_mapping: form.severity_mapping,
+            include_unknown: form.include_unknown,
+            pql_query: form.pql_query || null,
         };
         try {
             if (editId) {
@@ -406,6 +416,67 @@ export default function Filters() {
                             <label className="form-label">Description</label>
                             <textarea className="form-input" rows="2" placeholder="Optional description for this rule..."
                                 value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                        </div>
+
+                        {/* Advanced: PQL Query */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                            <label className="form-label">🔮 PQL Query (Advanced Filter Mode)</label>
+                            <textarea className="form-textarea" style={{ fontFamily: 'monospace', fontSize: 12 }}
+                                rows="3" placeholder='vendor:fortinet AND severity:CRITICAL,HIGH AND cvss:>7.0'
+                                value={form.pql_query} onChange={e => setForm(f => ({ ...f, pql_query: e.target.value }))} />
+                            <span className="text-xs text-muted">When set, PQL query takes precedence over standard fields. Supports: vendor, product, severity, cvss, kev, description.</span>
+                        </div>
+
+                        {/* Custom Severity Mapping */}
+                        <div className="form-group">
+                            <label className="form-label">Custom Severity Mapping</label>
+                            <div style={{ fontSize: 12 - 1 }}>
+                                {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(level => (
+                                    <div key={level} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                        <span style={{ width: 70, fontWeight: 600, fontSize: 11 }}>{level}:</span>
+                                        <input className="form-input" type="number" step="0.1" min="0" max="10"
+                                            style={{ width: 70, padding: '4px 6px', fontSize: 11 }}
+                                            placeholder="Min"
+                                            value={form.severity_mapping?.[level]?.min ?? ''}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                setForm(f => ({
+                                                    ...f,
+                                                    severity_mapping: {
+                                                        ...(f.severity_mapping || {}),
+                                                        [level]: { ...(f.severity_mapping?.[level] || {}), min: val ? parseFloat(val) : undefined }
+                                                    }
+                                                }));
+                                            }} />
+                                        <span className="text-xs text-muted">–</span>
+                                        <input className="form-input" type="number" step="0.1" min="0" max="10"
+                                            style={{ width: 70, padding: '4px 6px', fontSize: 11 }}
+                                            placeholder="Max"
+                                            value={form.severity_mapping?.[level]?.max ?? ''}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                setForm(f => ({
+                                                    ...f,
+                                                    severity_mapping: {
+                                                        ...(f.severity_mapping || {}),
+                                                        [level]: { ...(f.severity_mapping?.[level] || {}), max: val ? parseFloat(val) : undefined }
+                                                    }
+                                                }));
+                                            }} />
+                                    </div>
+                                ))}
+                            </div>
+                            <span className="text-xs text-muted">Override default severity levels with custom CVSS score ranges.</span>
+                        </div>
+
+                        {/* Include Unknown */}
+                        <div className="form-group">
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 24 }}>
+                                <input type="checkbox" checked={form.include_unknown}
+                                    onChange={e => setForm(f => ({ ...f, include_unknown: e.target.checked }))}
+                                    style={{ accentColor: 'var(--purple-400)' }} />
+                                <span>❓ Include CVEs without CVSS scores (UNKNOWN severity)</span>
+                            </label>
                         </div>
                     </div>
 

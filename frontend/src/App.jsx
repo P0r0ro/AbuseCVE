@@ -8,6 +8,8 @@ import KnowledgeArticles from './pages/KnowledgeArticles';
 import Configuration from './pages/Configuration';
 import TestPage from './pages/TestPage';
 import HealthReports from './pages/HealthReports';
+import Logs from './pages/Logs';
+import Integrations from './pages/Integrations';
 
 const navItems = [
     { path: '/dashboard', icon: '📊', label: 'Dashboard' },
@@ -16,6 +18,8 @@ const navItems = [
     { path: '/cves', icon: '🗄️', label: 'CVE Database' },
     { path: '/knowledge', icon: '📝', label: 'Knowledge Articles' },
     { path: '/config', icon: '⚙️', label: 'Configuration' },
+    { path: '/logs', icon: '📜', label: 'Logs' },
+    { path: '/integrations', icon: '🔗', label: 'Integrations' },
     { path: '/test', icon: '🧪', label: 'Test Chain' },
     { path: '/health', icon: '💊', label: 'Health Reports' },
 ];
@@ -58,6 +62,8 @@ export default function App() {
                         <Route path="/cves" element={<CVEDatabase />} />
                         <Route path="/knowledge" element={<KnowledgeArticles />} />
                         <Route path="/config" element={<Configuration />} />
+                        <Route path="/logs" element={<Logs />} />
+                        <Route path="/integrations" element={<Integrations />} />
                         <Route path="/test" element={<TestPage />} />
                         <Route path="/health" element={<HealthReports />} />
                     </Routes>

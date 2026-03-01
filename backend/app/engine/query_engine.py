@@ -408,3 +408,153 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
 
     logger.warning(f"Cannot translate operator '{operator}' to SQL, skipping")
     return None
+
+
+def parse_pql_to_conditions(pql_string: str) -> dict:
+    """Parse a PQL (Policy Query Language) string into conditions JSON.
+
+    Supports:
+    - field:value (contains match)
+    - field:"exact phrase" (exact match for multi-word values)
+    - field:>N, field:<N, field:>=N, field:<=N (numeric comparisons)
+    - field:=value (exact match)
+    - field:~regex (regex match)
+    - field:!value (not contains)
+    - AND / OR / NOT boolean operators
+    - Bare words search across cve_id, vendor, product, description
+
+    Examples:
+        vendor:fortinet severity:CRITICAL cvss:>7.0
+        vendor:microsoft AND product:windows
+        description:"buffer overflow" OR description:"remote code execution"
+        kev:true severity:HIGH,CRITICAL
+    """
+    import re
+    import shlex
+
+    pql_string = pql_string.strip()
+    if not pql_string:
+        return {}
+
+    # Try to split respecting quotes
+    try:
+        tokens = shlex.split(pql_string)
+    except ValueError:
+        tokens = pql_string.split()
+
+    conditions_list = []
+    i = 0
+
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Skip boolean operators (we'll handle them later)
+        if token.upper() in ("AND", "OR", "NOT"):
+            i += 1
+            continue
+
+        # Check for field:value pattern
+        if ":" in token and not token.startswith(":"):
+            field, _, value = token.partition(":")
+
+            # Handle quoted values that were split
+            if value.startswith('"') and not value.endswith('"'):
+                # Recombine quoted value
+                parts = [value]
+                i += 1
+                while i < len(tokens) and not tokens[i].endswith('"'):
+                    parts.append(tokens[i])
+                    i += 1
+                if i < len(tokens):
+                    parts.append(tokens[i])
+                value = " ".join(parts).strip('"')
+            else:
+                value = value.strip('"').strip("'")
+
+            condition = _pql_field_to_condition(field.lower(), value)
+            if condition:
+                conditions_list.append(condition)
+        else:
+            # Bare word — search across all text fields
+            word = token.strip('"').strip("'")
+            if word:
+                conditions_list.append({
+                    "logic": "OR",
+                    "conditions": [
+                        {"field": "cve_id", "operator": "contains", "value": word},
+                        {"field": "vendor", "operator": "contains", "value": word},
+                        {"field": "product", "operator": "contains", "value": word},
+                        {"field": "description", "operator": "contains", "value": word},
+                    ]
+                })
+
+        i += 1
+
+    if not conditions_list:
+        return {}
+
+    # Check if original query uses OR
+    if " OR " in pql_string.upper():
+        return {"logic": "OR", "conditions": conditions_list}
+
+    if len(conditions_list) == 1:
+        return conditions_list[0]
+
+    return {"logic": "AND", "conditions": conditions_list}
+
+
+def _pql_field_to_condition(field: str, value: str) -> dict | None:
+    """Convert a single PQL field:value pair to a condition dict."""
+    # Field aliases
+    field_map = {
+        "id": "cve_id", "cve": "cve_id", "cveid": "cve_id",
+        "desc": "description", "descr": "description",
+        "sev": "severity", "level": "severity",
+        "score": "cvss_score", "cvss": "cvss_score",
+        "src": "source",
+        "kev": "kev_flag",
+        "pub": "published_date", "published": "published_date",
+        "mod": "modified_date", "modified": "modified_date",
+        "vec": "cvss_vector", "vector": "cvss_vector",
+    }
+    field = field_map.get(field, field)
+
+    # Numeric comparisons
+    if value.startswith(">="):
+        return {"field": field, "operator": "gte", "value": float(value[2:])}
+    if value.startswith("<="):
+        return {"field": field, "operator": "lte", "value": float(value[2:])}
+    if value.startswith(">"):
+        return {"field": field, "operator": "gt", "value": float(value[1:])}
+    if value.startswith("<"):
+        return {"field": field, "operator": "lt", "value": float(value[1:])}
+
+    # Exact match
+    if value.startswith("="):
+        return {"field": field, "operator": "equal", "value": value[1:]}
+
+    # Regex match
+    if value.startswith("~"):
+        return {"field": field, "operator": "regex", "value": value[1:]}
+
+    # NOT match
+    if value.startswith("!"):
+        return {"field": field, "operator": "not_contains", "value": value[1:]}
+
+    # Comma-separated values (OR)
+    if "," in value:
+        values = [v.strip() for v in value.split(",") if v.strip()]
+        return {
+            "logic": "OR",
+            "conditions": [
+                {"field": field, "operator": "equal", "value": v}
+                for v in values
+            ]
+        }
+
+    # Boolean fields
+    if field == "kev_flag":
+        return {"field": field, "operator": "equal", "value": value.lower() in ("true", "1", "yes")}
+
+    # Default: contains match
+    return {"field": field, "operator": "contains", "value": value}

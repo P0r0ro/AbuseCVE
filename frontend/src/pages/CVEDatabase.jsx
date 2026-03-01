@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCVEs, generateKA } from '../api';
+import { getCVEs, generateKA, searchCVEs, getQueryHelp } from '../api';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -20,6 +20,9 @@ export default function CVEDatabase() {
     });
     const [selected, setSelected] = useState(null);
     const [genStatus, setGenStatus] = useState('');
+    const [pqlQuery, setPqlQuery] = useState('');
+    const [showHelp, setShowHelp] = useState(false);
+    const [queryHelp, setQueryHelp] = useState(null);
 
     const fetchData = async () => {
         setLoading(true);
@@ -61,11 +64,65 @@ export default function CVEDatabase() {
                 </div>
             )}
 
-            {/* Search & Filters */}
+            {/* PQL Search Bar */}
+            <div className="card mb-20">
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            🔍 PQL Search
+                            <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, padding: '2px 8px' }}
+                                onClick={async () => {
+                                    setShowHelp(true);
+                                    if (!queryHelp) {
+                                        try { const h = await getQueryHelp(); setQueryHelp(h); } catch (e) { setQueryHelp({ error: e.message }); }
+                                    }
+                                }}>? Help</button>
+                        </label>
+                        <input className="form-input" style={{ fontFamily: 'monospace', fontSize: 13 }}
+                            placeholder='vendor:microsoft severity:HIGH,CRITICAL cvss:>7.0  OR  "buffer overflow"'
+                            value={pqlQuery}
+                            onChange={e => setPqlQuery(e.target.value)}
+                            onKeyDown={async e => {
+                                if (e.key === 'Enter' && pqlQuery.trim()) {
+                                    setLoading(true);
+                                    try {
+                                        const data = await searchCVEs(pqlQuery, params.page, params.per_page);
+                                        setCves(data.cves || data.items || data.results || []);
+                                        setTotal(data.total || 0);
+                                        setPages(data.pages || 1);
+                                    } catch (e2) { console.error(e2); }
+                                    finally { setLoading(false); }
+                                }
+                            }}
+                        />
+                        <span className="text-xs text-muted" style={{ marginTop: 4, display: 'block' }}>
+                            Press Enter to search • Supports: vendor:X product:X severity:X cvss:&gt;N kev:true description:"phrase"
+                        </span>
+                    </div>
+                    <button className="btn btn-primary" style={{ alignSelf: 'flex-end', marginBottom: 20 }}
+                        onClick={async () => {
+                            if (!pqlQuery.trim()) return;
+                            setLoading(true);
+                            try {
+                                const data = await searchCVEs(pqlQuery, params.page, params.per_page);
+                                setCves(data.cves || data.items || data.results || []);
+                                setTotal(data.total || 0);
+                                setPages(data.pages || 1);
+                            } catch (e) { console.error(e); }
+                            finally { setLoading(false); }
+                        }}>🔎 Search</button>
+                    {pqlQuery && (
+                        <button className="btn btn-secondary" style={{ alignSelf: 'flex-end', marginBottom: 20 }}
+                            onClick={() => { setPqlQuery(''); fetchData(); }}>✕ Clear</button>
+                    )}
+                </div>
+            </div>
+
+            {/* Standard Filters */}
             <div className="card mb-20">
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <div style={{ flex: 2, minWidth: 200 }}>
-                        <label className="form-label">Search</label>
+                        <label className="form-label">Quick Search</label>
                         <input className="form-input" placeholder="Search CVE ID, description, vendor..."
                             value={params.search} onChange={e => updateParam('search', e.target.value)} />
                     </div>
@@ -266,6 +323,77 @@ export default function CVEDatabase() {
                                 📝 Generate KA
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* PQL Help Modal */}
+            {showHelp && (
+                <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowHelp(false)}>
+                    <div className="modal" style={{ maxWidth: 700 }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">📖 PQL Query Language Reference</h2>
+                            <button className="modal-close" onClick={() => setShowHelp(false)}>×</button>
+                        </div>
+                        {queryHelp?.error ? (
+                            <p className="text-sm" style={{ color: 'var(--error)' }}>{queryHelp.error}</p>
+                        ) : queryHelp ? (
+                            <div style={{ maxHeight: 500, overflow: 'auto' }}>
+                                {queryHelp.operators && (
+                                    <div className="mb-16">
+                                        <h3 className="text-sm" style={{ fontWeight: 700, marginBottom: 8 }}>Operators</h3>
+                                        <table style={{ width: '100%', fontSize: 13 }}>
+                                            <thead><tr><th>Operator</th><th>Description</th><th>Example</th></tr></thead>
+                                            <tbody>
+                                                {queryHelp.operators.map((op, i) => (
+                                                    <tr key={i}>
+                                                        <td className="text-mono">{op.operator || op.name}</td>
+                                                        <td className="text-sm">{op.description}</td>
+                                                        <td className="text-mono text-sm">{op.example || ''}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                                {queryHelp.fields && (
+                                    <div className="mb-16">
+                                        <h3 className="text-sm" style={{ fontWeight: 700, marginBottom: 8 }}>Available Fields</h3>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                            {queryHelp.fields.map(f => (
+                                                <span key={f} className="badge badge-info" style={{ fontSize: 12 }}>{f}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="mb-16">
+                                    <h3 className="text-sm" style={{ fontWeight: 700, marginBottom: 8 }}>PQL Quick Reference</h3>
+                                    <pre style={{ background: 'var(--bg-secondary)', padding: 16, borderRadius: 8, fontSize: 12, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{`# Search by field
+vendor:microsoft
+severity:CRITICAL,HIGH
+cvss:>7.0
+
+# Quoted phrases
+description:"buffer overflow"
+
+# Comparisons
+cvss:>=9.0
+cvss:<4.0
+
+# Boolean
+vendor:fortinet AND severity:CRITICAL
+description:"remote code" OR description:"RCE"
+
+# KEV flag
+kev:true
+
+# Bare words (search all text fields)
+fortinet`}</pre>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="loading"><div className="loading-spinner" /> Loading help...</div>
+                        )}
                     </div>
                 </div>
             )}

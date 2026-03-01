@@ -40,6 +40,7 @@ async def init_db():
     """Create all tables and add any missing columns (lightweight migration)."""
     async with engine.begin() as conn:
         from app.models import cve, filter_rule, alert_log, knowledge_article, health_report  # noqa
+        from app.models import worker_log, integration  # noqa  – new tables
         await conn.run_sync(Base.metadata.create_all)
 
         # Lightweight migration: add columns that may be missing from older schemas.
@@ -48,6 +49,9 @@ async def init_db():
             # FilterRule new columns
             ("filter_rules", "alert_on_modified", "BOOLEAN DEFAULT FALSE"),
             ("filter_rules", "conditions", "JSONB"),
+            ("filter_rules", "severity_mapping", "JSONB"),
+            ("filter_rules", "include_unknown", "BOOLEAN DEFAULT FALSE"),
+            ("filter_rules", "pql_query", "TEXT"),
             # CVE new columns
             ("cves", "sources", "JSONB"),
             ("cves", "cvss_scores", "JSONB"),

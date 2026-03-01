@@ -137,3 +137,36 @@ export const sendHealthReport = () => request('/health-reports/send', { method: 
 
 // ── Health Check ─────────────────────────────
 export const healthCheck = () => request('/health');
+
+// ── MITRE Upload ─────────────────────────────
+export const uploadMitreData = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const url = `${API_BASE}/dashboard/upload-mitre`;
+    const res = await fetch(url, { method: 'POST', body: formData });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+};
+
+// ── Logs ─────────────────────────────────────
+export const getLogs = (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)); });
+    return request(`/logs?${qs.toString()}`);
+};
+export const getWorkerTypes = () => request('/logs/worker-types');
+export const clearLogs = (workerType) =>
+    request(`/logs/clear${workerType ? `?worker_type=${workerType}` : ''}`, { method: 'DELETE' });
+
+// ── Integrations ─────────────────────────────
+export const getIntegrations = () => request('/integrations');
+export const getIntegration = (id) => request(`/integrations/${id}`);
+export const createIntegration = (data) => request('/integrations', { method: 'POST', body: data });
+export const updateIntegration = (id, data) => request(`/integrations/${id}`, { method: 'PUT', body: data });
+export const deleteIntegration = (id) => request(`/integrations/${id}`, { method: 'DELETE' });
+export const toggleIntegration = (id) => request(`/integrations/${id}/toggle`, { method: 'POST' });
+export const testIntegration = (id) => request(`/integrations/${id}/test`, { method: 'POST' });
+

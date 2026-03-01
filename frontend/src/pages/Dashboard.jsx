@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus } from '../api';
+import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus, uploadMitreData, getCVE } from '../api';
 
 const severityColors = {
     CRITICAL: 'var(--critical)',
@@ -40,6 +40,10 @@ export default function Dashboard() {
     const [scanStatus, setScanStatus] = useState('');
     const [initMode, setInitMode] = useState('api');
     const [mitreDir, setMitreDir] = useState('');
+    const [mitreFile, setMitreFile] = useState(null);
+    const [expandedCve, setExpandedCve] = useState(null);
+    const [cveDetail, setCveDetail] = useState(null);
+    const [loadingDetail, setLoadingDetail] = useState(false);
 
     // Persistent task tracking
     const [activeTask, setActiveTask] = useState(getStoredTask);
@@ -152,15 +156,36 @@ export default function Dashboard() {
     const handleInitDB = async () => {
         setScanStatus('');
         try {
-            if (initMode === 'local' && mitreDir) {
+            if (initMode === 'upload' && mitreFile) {
+                const result = await uploadMitreData(mitreFile);
+                startTask(result.task_id, 'MITRE Upload');
+            } else if (initMode === 'local' && mitreDir) {
                 const result = await initializeDBLocal(mitreDir);
                 startTask(result.task_id, 'Local DB Init');
             } else {
                 const result = await initializeDB();
-                startTask(result.task_id, 'Full DB Init (API)');
+                startTask(result.task_id, 'DB Init (NVD + KEV + RedHat)');
             }
         } catch (e) {
             setScanStatus(`Error: ${e.message}`);
+        }
+    };
+
+    const handleCveClick = async (cveId) => {
+        if (expandedCve === cveId) {
+            setExpandedCve(null);
+            setCveDetail(null);
+            return;
+        }
+        setExpandedCve(cveId);
+        setLoadingDetail(true);
+        try {
+            const detail = await getCVE(cveId);
+            setCveDetail(detail);
+        } catch (e) {
+            setCveDetail({ error: e.message });
+        } finally {
+            setLoadingDetail(false);
         }
     };
 
@@ -353,20 +378,37 @@ export default function Dashboard() {
                         <div className="card-title">Database Initialization</div>
                     </div>
                     <p className="text-sm text-muted mb-16">
-                        Pull ALL past CVEs from NVD, MITRE, CISA KEV, and RedHat into the database.
+                        Pull CVEs from NVD, CISA KEV, and RedHat via API. Upload MITRE data separately.
                     </p>
 
                     <div className="form-group" style={{ marginBottom: 12 }}>
-                        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                                 <input type="radio" name="initMode" checked={initMode === 'api'} onChange={() => setInitMode('api')} />
-                                <span className="text-sm">Via API (slow)</span>
+                                <span className="text-sm">API (NVD + KEV + RedHat)</span>
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                <input type="radio" name="initMode" checked={initMode === 'upload'} onChange={() => setInitMode('upload')} />
+                                <span className="text-sm">Upload MITRE ZIP</span>
                             </label>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                                 <input type="radio" name="initMode" checked={initMode === 'local'} onChange={() => setInitMode('local')} />
-                                <span className="text-sm">Local Directory (fast)</span>
+                                <span className="text-sm">Local Directory</span>
                             </label>
                         </div>
+
+                        {initMode === 'upload' && (
+                            <div className="form-group">
+                                <label className="form-label">MITRE cvelistV5 ZIP File</label>
+                                <input type="file" accept=".zip" className="form-input" style={{ padding: '8px 12px' }}
+                                    onChange={e => setMitreFile(e.target.files[0])} />
+                                <p className="text-xs text-muted" style={{ marginTop: 4 }}>
+                                    1. Clone: git clone https://github.com/CVEProject/cvelistV5.git<br />
+                                    2. ZIP the cves/ directory<br />
+                                    3. Upload the ZIP here
+                                </p>
+                            </div>
+                        )}
 
                         {initMode === 'local' && (
                             <div className="form-group">
@@ -381,8 +423,11 @@ export default function Dashboard() {
                     </div>
 
                     <button className="btn btn-primary" onClick={handleInitDB}
-                        disabled={activeTask && !activeTask.finished}>
-                        {activeTask && !activeTask.finished ? '⏳ Task Running...' : '🗄️ Initialize Full Database'}
+                        disabled={(activeTask && !activeTask.finished) || (initMode === 'upload' && !mitreFile)}>
+                        {activeTask && !activeTask.finished ? '⏳ Task Running...' :
+                            initMode === 'upload' ? '📤 Upload MITRE Data' :
+                                initMode === 'local' ? '📂 Init from Local' :
+                                    '🗄️ Initialize Database (API)'}
                     </button>
                 </div>
             </div>
@@ -429,24 +474,52 @@ export default function Dashboard() {
                         </thead>
                         <tbody>
                             {(data?.recent_cves || []).map(cve => (
-                                <tr key={cve.cve_id}>
-                                    <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{cve.cve_id}</td>
-                                    <td>{cve.vendor || '—'}</td>
-                                    <td>{cve.product || '—'}</td>
-                                    <td><span className={`badge badge-${(cve.severity || 'unknown').toLowerCase()}`}>{cve.severity || 'N/A'}</span></td>
-                                    <td className="text-mono">{cve.cvss_score ?? '—'}</td>
-                                    <td>
-                                        <span style={{
-                                            fontSize: 11, padding: '2px 6px', borderRadius: 4,
-                                            background: `${sourceColors[cve.source] || '#666'}20`,
-                                            color: sourceColors[cve.source] || '#888',
-                                        }}>
-                                            {cve.source || '—'}
-                                        </span>
-                                    </td>
-                                    <td>{cve.kev_flag ? <span className="badge badge-kev">⚠ KEV</span> : '—'}</td>
-                                    <td className="text-sm text-muted">{cve.first_seen ? new Date(cve.first_seen).toLocaleDateString() : '—'}</td>
-                                </tr>
+                                <React.Fragment key={cve.cve_id}>
+                                    <tr style={{ cursor: 'pointer' }} onClick={() => handleCveClick(cve.cve_id)}
+                                        className={expandedCve === cve.cve_id ? 'row-expanded' : ''}>
+                                        <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{cve.cve_id}</td>
+                                        <td>{cve.vendor || '—'}</td>
+                                        <td>{cve.product || '—'}</td>
+                                        <td><span className={`badge badge-${(cve.severity || 'unknown').toLowerCase()}`}>{cve.severity || 'N/A'}</span></td>
+                                        <td className="text-mono">{cve.cvss_score ?? '—'}</td>
+                                        <td>
+                                            <span style={{
+                                                fontSize: 11, padding: '2px 6px', borderRadius: 4,
+                                                background: `${sourceColors[cve.source] || '#666'}20`,
+                                                color: sourceColors[cve.source] || '#888',
+                                            }}>{cve.source || '—'}</span>
+                                        </td>
+                                        <td>{cve.kev_flag ? <span className="badge badge-kev">⚠ KEV</span> : '—'}</td>
+                                        <td className="text-sm text-muted">{cve.first_seen ? new Date(cve.first_seen).toLocaleDateString() : '—'}</td>
+                                    </tr>
+                                    {expandedCve === cve.cve_id && (
+                                        <tr>
+                                            <td colSpan="8" style={{ padding: 0, border: 'none' }}>
+                                                <div style={{ padding: '16px 24px', background: 'rgba(124,58,237,0.05)', borderLeft: '3px solid var(--purple-400)', animation: 'slideDown 0.2s ease' }}>
+                                                    {loadingDetail ? (
+                                                        <div className="loading"><div className="loading-spinner" style={{ width: 16, height: 16 }} /> Loading...</div>
+                                                    ) : cveDetail?.error ? (
+                                                        <div className="text-sm" style={{ color: 'var(--error)' }}>{cveDetail.error}</div>
+                                                    ) : cveDetail ? (
+                                                        <div>
+                                                            <div className="text-sm" style={{ marginBottom: 8 }}><strong>Description:</strong> {cveDetail.description || 'No description'}</div>
+                                                            {cveDetail.cvss_vector && <div className="text-xs text-muted" style={{ marginBottom: 4 }}>Vector: {cveDetail.cvss_vector}</div>}
+                                                            {cveDetail.published_date && <div className="text-xs text-muted" style={{ marginBottom: 4 }}>Published: {new Date(cveDetail.published_date).toLocaleString()}</div>}
+                                                            {cveDetail.references?.length > 0 && (
+                                                                <div style={{ marginTop: 8 }}>
+                                                                    <strong className="text-xs">References:</strong>
+                                                                    <div style={{ marginTop: 4 }}>{cveDetail.references.slice(0, 5).map((ref, i) => (
+                                                                        <a key={i} href={ref} target="_blank" rel="noopener" className="text-xs" style={{ display: 'block', color: 'var(--purple-400)', marginBottom: 2 }}>{ref}</a>
+                                                                    ))}</div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </React.Fragment>
                             ))}
                             {(!data?.recent_cves || data.recent_cves.length === 0) && (
                                 <tr><td colSpan="8" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No CVEs yet. Initialize the database to get started.</td></tr>

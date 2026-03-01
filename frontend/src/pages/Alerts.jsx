@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAlerts, getAlertStats } from '../api';
+import { getAlerts, getAlertStats, getCVE } from '../api';
 
 export default function Alerts() {
     const [alerts, setAlerts] = useState([]);
@@ -7,6 +7,8 @@ export default function Alerts() {
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
+    const [expandedCve, setExpandedCve] = useState(null);
+    const [cveDetail, setCveDetail] = useState(null);
 
     const fetchAlerts = async () => {
         try {
@@ -67,13 +69,41 @@ export default function Alerts() {
                         </thead>
                         <tbody>
                             {alerts.map(a => (
-                                <tr key={a.id}>
-                                    <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{a.cve_id}</td>
-                                    <td><span className={`badge ${a.status === 'sent' ? 'badge-success' : 'badge-error'}`}>{a.status}</span></td>
-                                    <td className="text-sm text-muted">{a.sent_at ? new Date(a.sent_at).toLocaleString() : '—'}</td>
-                                    <td className="text-sm">{a.recipient || '—'}</td>
-                                    <td className="text-sm text-muted">{a.error_message || '—'}</td>
-                                </tr>
+                                <React.Fragment key={a.id}>
+                                    <tr>
+                                        <td className="text-mono" style={{ color: 'var(--purple-400)', cursor: 'pointer' }}
+                                            onClick={async () => {
+                                                if (expandedCve === a.cve_id) { setExpandedCve(null); setCveDetail(null); return; }
+                                                setExpandedCve(a.cve_id);
+                                                try { const d = await getCVE(a.cve_id); setCveDetail(d); } catch (e) { setCveDetail({ error: e.message }); }
+                                            }}>{a.cve_id}</td>
+                                        <td><span className={`badge ${a.status === 'sent' ? 'badge-success' : 'badge-error'}`}>{a.status}</span></td>
+                                        <td className="text-sm text-muted">{a.sent_at ? new Date(a.sent_at).toLocaleString() : '—'}</td>
+                                        <td className="text-sm">{a.recipient || '—'}</td>
+                                        <td className="text-sm text-muted">{a.error_message || '—'}</td>
+                                    </tr>
+                                    {expandedCve === a.cve_id && cveDetail && (
+                                        <tr><td colSpan="5" style={{ padding: 0, border: 'none' }}>
+                                            <div style={{ padding: '12px 24px', background: 'rgba(124,58,237,0.05)', borderLeft: '3px solid var(--purple-400)' }}>
+                                                {cveDetail.error ? (
+                                                    <div className="text-sm" style={{ color: 'var(--error)' }}>{cveDetail.error}</div>
+                                                ) : (
+                                                    <div>
+                                                        <div className="text-sm" style={{ marginBottom: 6 }}><strong>Description:</strong> {cveDetail.description || 'N/A'}</div>
+                                                        <div className="text-xs text-muted">Severity: {cveDetail.severity || 'N/A'} | CVSS: {cveDetail.cvss_score ?? 'N/A'} | Source: {cveDetail.source || 'N/A'}</div>
+                                                        {cveDetail.references?.length > 0 && (
+                                                            <div style={{ marginTop: 6 }}>
+                                                                {cveDetail.references.slice(0, 3).map((r, i) => (
+                                                                    <a key={i} href={r} target="_blank" rel="noopener" className="text-xs" style={{ display: 'block', color: 'var(--purple-400)' }}>{r}</a>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </td></tr>
+                                    )}
+                                </React.Fragment>
                             ))}
                             {alerts.length === 0 && (
                                 <tr><td colSpan="5" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No alerts sent yet.</td></tr>

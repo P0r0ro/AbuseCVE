@@ -52,8 +52,25 @@ def _cve_to_dict(cve: NormalizedCVE) -> dict:
 def match_cve_against_rule(cve: NormalizedCVE, rule: dict) -> bool:
     """Check if a single CVE matches a filter rule.
 
-    Supports both legacy rules and advanced query conditions.
+    Supports:
+    - PQL query mode (raw query string parsed to conditions)
+    - Advanced query conditions using the query engine
+    - Legacy simple filters (vendor, products, CVSS, severity, keywords)
+    - Custom severity mapping (score ranges)
+    - Include UNKNOWN (CVEs without CVSS scores)
     """
+    # ── PQL query mode ───────────────────────────────────
+    pql_query = rule.get("pql_query")
+    if pql_query and pql_query.strip():
+        cve_dict = _cve_to_dict(cve)
+        try:
+            from app.engine.query_engine import parse_pql_to_conditions, evaluate_query
+            conditions = parse_pql_to_conditions(pql_query)
+            return evaluate_query(cve_dict, conditions)
+        except Exception as e:
+            logger.warning(f"PQL query evaluation failed: {e}")
+            return False
+
     # ── Advanced conditions mode ─────────────────────────
     conditions = rule.get("conditions")
     if conditions:
@@ -130,22 +147,46 @@ def match_cve_against_rule(cve: NormalizedCVE, rule: dict) -> bool:
     # 3. CVSS range
     min_cvss = rule.get("min_cvss")
     max_cvss = rule.get("max_cvss")
-    if min_cvss is not None and cve.cvss_score is not None:
-        if cve.cvss_score < min_cvss:
-            return False
-    if max_cvss is not None and cve.cvss_score is not None:
-        if cve.cvss_score > max_cvss:
-            return False
+    include_unknown = rule.get("include_unknown", False)
 
-    # 4. Severity filter (supports multiple values)
+    if min_cvss is not None or max_cvss is not None:
+        if cve.cvss_score is None:
+            if not include_unknown:
+                return False
+            # If include_unknown, skip CVSS check for unscored CVEs
+        else:
+            if min_cvss is not None and cve.cvss_score < min_cvss:
+                return False
+            if max_cvss is not None and cve.cvss_score > max_cvss:
+                return False
+
+    # 4. Severity filter (supports multiple values + custom mapping)
+    severity_mapping = rule.get("severity_mapping")
     severity_filter = rule.get("severity_filter") or []
-    if severity_filter:
+
+    if severity_mapping:
+        # Custom severity mapping: determine CVE severity from CVSS score
+        if cve.cvss_score is not None:
+            matched_severity = False
+            for sev_name, score_range in severity_mapping.items():
+                if isinstance(score_range, list) and len(score_range) == 2:
+                    if score_range[0] <= cve.cvss_score <= score_range[1]:
+                        matched_severity = True
+                        break
+            if not matched_severity:
+                return False
+        else:
+            # CVE has no score — check include_unknown
+            if not include_unknown:
+                return False
+    elif severity_filter:
         if cve.severity:
             if cve.severity.upper() not in [s.upper() for s in severity_filter]:
                 return False
         else:
-            # If CVE has no severity and filter requires specific ones, skip
-            return False
+            # If CVE has no severity and filter requires specific ones
+            if not include_unknown:
+                return False
 
     # 5. Keyword include (products merged as default keywords)
     keywords_include = rule.get("keywords_include") or []

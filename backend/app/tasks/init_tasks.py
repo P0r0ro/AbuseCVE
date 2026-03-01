@@ -90,14 +90,65 @@ def initialize_database_local(self, mitre_dir: str = None, nvd_dir: str = None):
                 logger.info(f"DB Init local result: {result}")
                 return result
             except Exception as e:
-                logger.error(f"DB Init local failed: {e}", exc_info=True)
+                logger.error(
+                    f"Local DB init failed: {type(e).__name__}: {e}\n"
+                    f"Traceback: {traceback.format_exc()}"
+                )
                 await session.rollback()
                 raise
 
     try:
         result = _run_async(_init())
-        logger.info(f"✅ DB local initialization complete: {result}")
+        logger.info(f"✅ Local DB init complete: {result}")
         return result
     except Exception as exc:
-        logger.error(f"❌ DB local initialization failed: {exc}")
+        logger.error(f"❌ Local DB init failed: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.init_tasks.initialize_database_upload",
+    max_retries=1,
+    acks_late=True,
+)
+def initialize_database_upload(self, file_path: str):
+    """Process uploaded MITRE CVE data file (ZIP).
+
+    Called after user uploads a MITRE cvelistV5 ZIP through the UI.
+    """
+    logger.info(f"📤 Starting MITRE upload processing: {file_path}")
+
+    async def _upload():
+        from app.engine.pipeline import CVEPipeline
+        from app.database import async_session
+
+        pipeline = CVEPipeline()
+
+        async with async_session() as session:
+            try:
+                result = await pipeline.initialize_db_from_upload(session, file_path)
+                return result
+            except Exception as e:
+                logger.error(
+                    f"Upload processing failed: {type(e).__name__}: {e}\n"
+                    f"Traceback: {traceback.format_exc()}"
+                )
+                await session.rollback()
+                raise
+            finally:
+                # Clean up temp file
+                import os
+                try:
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                except Exception:
+                    pass
+
+    try:
+        result = _run_async(_upload())
+        logger.info(f"✅ MITRE upload complete: {result}")
+        return result
+    except Exception as exc:
+        logger.error(f"❌ MITRE upload failed: {exc}")
         raise self.retry(exc=exc)

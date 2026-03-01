@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy import select, func
@@ -71,11 +71,14 @@ async def dashboard_overview(db: AsyncSession = Depends(get_db)):
 
 @router.post("/initialize-db")
 async def initialize_database():
-    """Trigger full bulk import of ALL past CVEs from all sources."""
+    """Trigger bulk import of CVEs from NVD, CISA KEV, and RedHat.
+
+    NOTE: MITRE is excluded from API init (use the upload mechanism instead).
+    """
     from app.tasks.init_tasks import initialize_database as init_db_task
     task = init_db_task.delay()
     return {
-        "message": "Full database initialization started (NVD + MITRE + CISA KEV + RedHat)",
+        "message": "Database initialization started (NVD + CISA KEV + RedHat). Use Upload for MITRE data.",
         "task_id": task.id,
     }
 
@@ -99,6 +102,36 @@ async def initialize_database_local(data: LocalInitRequest):
         "message": "Local database initialization started",
         "task_id": task.id,
         "mitre_dir": data.mitre_dir,
+    }
+
+
+@router.post("/upload-mitre")
+async def upload_mitre_data(
+    file: UploadFile = File(...),
+):
+    """Upload MITRE CVE data (ZIP from cvelistV5) for import.
+
+    Steps:
+    1. Download cvelistV5 from https://github.com/CVEProject/cvelistV5
+    2. ZIP the cves/ directory
+    3. Upload the ZIP here
+    """
+    import tempfile
+    import os
+
+    # Save uploaded file to temp
+    suffix = os.path.splitext(file.filename or ".zip")[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="abusecve_mitre_") as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    from app.tasks.init_tasks import initialize_database_upload as upload_task
+    task = upload_task.delay(file_path=tmp_path)
+    return {
+        "message": f"MITRE data upload started ({len(content)} bytes)",
+        "task_id": task.id,
+        "filename": file.filename,
     }
 
 

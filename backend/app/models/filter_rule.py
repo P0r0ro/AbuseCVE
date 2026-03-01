@@ -24,6 +24,9 @@ class FilterRule(Base):
     description = Column(Text, nullable=True)
     alert_on_modified = Column(Boolean, default=False)  # Alert when CVE is updated/modified
     conditions = Column(JSON, nullable=True)  # Advanced query conditions (nested)
+    severity_mapping = Column(JSON, nullable=True)  # {"low": [0, 3], "medium": [3, 7], "high": [7, 10], "critical": [9, 10]}
+    include_unknown = Column(Boolean, default=False)  # Include CVEs without CVSS scores
+    pql_query = Column(Text, nullable=True)  # Raw PQL query string for PQL mode
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -43,6 +46,9 @@ class FilterRule(Base):
             "description": self.description,
             "alert_on_modified": self.alert_on_modified,
             "conditions": self.conditions,
+            "severity_mapping": self.severity_mapping,
+            "include_unknown": self.include_unknown,
+            "pql_query": self.pql_query,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

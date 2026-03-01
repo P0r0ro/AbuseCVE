@@ -129,6 +129,13 @@ def run_cve_scan(self):
                         .values(alert_sent=True)
                     )
 
+                    # Dispatch to webhook/CRM integrations
+                    try:
+                        from app.services.webhook_service import dispatch_to_all_integrations
+                        await dispatch_to_all_integrations(session, cve_dict, rule_name=rule_name)
+                    except Exception as ie:
+                        logger.warning(f"Integration dispatch failed for {cve_data.cve_id}: {ie}")
+
                 await session.commit()
 
                 return {
