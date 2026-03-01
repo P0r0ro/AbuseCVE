@@ -10,7 +10,7 @@ const LEVEL_COLORS = {
 };
 
 export default function Logs() {
-    const [activeTab, setActiveTab] = useState('logs'); // 'logs' | 'redis'
+    const [activeTab, setActiveTab] = useState('logs');
     const [logs, setLogs] = useState([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
@@ -19,7 +19,6 @@ export default function Logs() {
     const [filters, setFilters] = useState({ worker_type: '', level: '', search: '' });
     const [autoRefresh, setAutoRefresh] = useState(false);
 
-    // Redis state
     const [redisInfo, setRedisInfo] = useState(null);
     const [redisLoading, setRedisLoading] = useState(false);
     const [redisError, setRedisError] = useState(null);
@@ -34,44 +33,28 @@ export default function Logs() {
     }, [filters, page]);
 
     const fetchTypes = async () => {
-        try {
-            const data = await getWorkerTypes();
-            setWorkerTypes(data || []);
-        } catch (e) { console.error(e); }
+        try { setWorkerTypes((await getWorkerTypes()) || []); } catch (e) { console.error(e); }
     };
 
     const fetchRedis = async () => {
-        setRedisLoading(true);
-        setRedisError(null);
-        try {
-            const data = await getRedisInfo();
-            setRedisInfo(data);
-        } catch (e) {
-            setRedisError(e.message);
-        } finally {
-            setRedisLoading(false);
-        }
+        setRedisLoading(true); setRedisError(null);
+        try { setRedisInfo(await getRedisInfo()); }
+        catch (e) { setRedisError(e.message); }
+        finally { setRedisLoading(false); }
     };
 
     useEffect(() => { fetchLogs(); fetchTypes(); }, [fetchLogs]);
-
     useEffect(() => {
         if (!autoRefresh) return;
-        const interval = setInterval(fetchLogs, 5000);
-        return () => clearInterval(interval);
+        const id = setInterval(fetchLogs, 5000);
+        return () => clearInterval(id);
     }, [autoRefresh, fetchLogs]);
-
-    useEffect(() => {
-        if (activeTab === 'redis') fetchRedis();
-    }, [activeTab]);
+    useEffect(() => { if (activeTab === 'redis') fetchRedis(); }, [activeTab]);
 
     const handleClear = async (type) => {
         if (!confirm(`Clear ${type || 'all'} logs?`)) return;
-        try {
-            await clearLogs(type);
-            fetchLogs();
-            fetchTypes();
-        } catch (e) { alert(e.message); }
+        try { await clearLogs(type); fetchLogs(); fetchTypes(); }
+        catch (e) { alert(e.message); }
     };
 
     const pages = Math.ceil(total / 50);
@@ -80,7 +63,7 @@ export default function Logs() {
         <div className="main-content animate-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <div>
-                    <h1 className="header-title">📜 Logs & Diagnostics</h1>
+                    <h1 className="header-title">📜 Logs &amp; Diagnostics</h1>
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>Monitor worker activity and inspect the Redis pipeline pool</p>
                 </div>
                 {activeTab === 'logs' && (
@@ -113,12 +96,11 @@ export default function Logs() {
             {/* ═══ LOGS TAB ═══ */}
             {activeTab === 'logs' && (
                 <>
-                    {/* Worker type chips */}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
-                        <button
-                            className={`btn btn-sm ${!filters.worker_type ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => { setFilters(f => ({ ...f, worker_type: '' })); setPage(1); }}
-                        >All ({total})</button>
+                        <button className={`btn btn-sm ${!filters.worker_type ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => { setFilters(f => ({ ...f, worker_type: '' })); setPage(1); }}>
+                            All ({total})
+                        </button>
                         {workerTypes.map(wt => (
                             <button key={wt.type}
                                 className={`btn btn-sm ${filters.worker_type === wt.type ? 'btn-primary' : 'btn-secondary'}`}
@@ -128,11 +110,9 @@ export default function Logs() {
                         ))}
                     </div>
 
-                    {/* Level + search filters */}
                     <div className="card mb-20" style={{ padding: '12px 20px' }}>
                         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <select className="form-select" style={{ width: 150 }}
-                                value={filters.level}
+                            <select className="form-select" style={{ width: 150 }} value={filters.level}
                                 onChange={e => { setFilters(f => ({ ...f, level: e.target.value })); setPage(1); }}>
                                 <option value="">All Levels</option>
                                 {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
@@ -161,9 +141,7 @@ export default function Logs() {
                                         <tr><td colSpan={4} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No logs found</td></tr>
                                     ) : logs.map(log => (
                                         <tr key={log.id}>
-                                            <td className="text-xs" style={{ fontFamily: 'monospace' }}>
-                                                {new Date(log.timestamp).toLocaleString()}
-                                            </td>
+                                            <td className="text-xs" style={{ fontFamily: 'monospace' }}>{new Date(log.timestamp).toLocaleString()}</td>
                                             <td><span className="badge badge-info">{log.worker_type}</span></td>
                                             <td>
                                                 <span style={{ color: LEVEL_COLORS[log.level] || 'var(--text-primary)', fontWeight: 600, fontSize: 12 }}>
@@ -180,9 +158,7 @@ export default function Logs() {
                                                         </pre>
                                                     </details>
                                                 )}
-                                                {log.task_id && (
-                                                    <span className="text-xs text-muted" style={{ marginLeft: 8 }}>Task: {log.task_id}</span>
-                                                )}
+                                                {log.task_id && <span className="text-xs text-muted" style={{ marginLeft: 8 }}>Task: {log.task_id}</span>}
                                             </td>
                                         </tr>
                                     ))}
@@ -208,16 +184,17 @@ export default function Logs() {
                     {redisError && <div className="card" style={{ padding: 20, borderColor: 'var(--error)' }}>
                         <span style={{ color: 'var(--error)' }}>❌ Redis error: {redisError}</span>
                     </div>}
+
                     {redisInfo && (
                         <>
-                            {/* Stats grid */}
+                            {/* Stats overview */}
                             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 24 }}>
                                 <div className="stat-card">
                                     <div className="stat-icon">🔴</div>
                                     <div className="stat-value" style={{ color: redisInfo.status === 'ok' ? 'var(--success)' : 'var(--error)' }}>
                                         {redisInfo.status === 'ok' ? 'Online' : 'Error'}
                                     </div>
-                                    <div className="stat-label">Redis Status</div>
+                                    <div className="stat-label">Redis v{redisInfo.redis_version}</div>
                                 </div>
                                 <div className="stat-card">
                                     <div className="stat-icon">🗝️</div>
@@ -241,7 +218,7 @@ export default function Logs() {
                             {/* Celery queues */}
                             {Object.keys(redisInfo.celery_queues || {}).length > 0 && (
                                 <div className="card mb-20">
-                                    <div className="card-header"><div className="card-title">⚙️ Celery Queues</div></div>
+                                    <div className="card-header"><div className="card-title">⚙️ Celery Queues (Pending Tasks)</div></div>
                                     <div style={{ padding: '12px 20px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                                         {Object.entries(redisInfo.celery_queues).map(([q, len]) => (
                                             <div key={q} style={{ padding: '8px 16px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
@@ -253,17 +230,17 @@ export default function Logs() {
                                 </div>
                             )}
 
-                            {/* Key categories */}
+                            {/* Key distribution */}
                             {Object.keys(redisInfo.key_categories || {}).length > 0 && (
                                 <div className="card mb-20">
-                                    <div className="card-header"><div className="card-title">📊 Key Distribution</div></div>
+                                    <div className="card-header"><div className="card-title">📊 Key Distribution by Prefix</div></div>
                                     <div className="table-container">
                                         <table>
                                             <thead><tr><th>Key Prefix</th><th>Count</th></tr></thead>
                                             <tbody>
                                                 {Object.entries(redisInfo.key_categories).map(([prefix, count]) => (
                                                     <tr key={prefix}>
-                                                        <td className="text-mono text-sm">{prefix}</td>
+                                                        <td><code>{prefix}</code></td>
                                                         <td>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                                                 <span className="text-sm">{count.toLocaleString()}</span>
@@ -293,8 +270,8 @@ export default function Logs() {
                                             <tbody>
                                                 {redisInfo.cve_samples.map((s, i) => (
                                                     <tr key={i}>
-                                                        <td className="text-mono text-xs">{s.key}</td>
-                                                        <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{s.cve_id || s.key}</td>
+                                                        <td className="text-xs" style={{ fontFamily: 'monospace' }}>{s.key}</td>
+                                                        <td style={{ color: 'var(--purple-400)', fontFamily: 'monospace' }}>{s.cve_id || s.key}</td>
                                                         <td><span className={`badge badge-${(s.severity || 'unknown').toLowerCase()}`}>{s.severity || 'N/A'}</span></td>
                                                         <td className="text-sm">{s.source || '—'}</td>
                                                     </tr>
@@ -306,188 +283,21 @@ export default function Logs() {
                             )}
 
                             {redisInfo.cve_keys_found === 0 && redisInfo.status === 'ok' && (
-                                <div className="card" style={{ padding: 20, borderColor: 'var(--warning)' }}>
-                                    <span style={{ color: 'var(--warning)' }}>⚠️ Redis is connected but has no <code>cve:*</code> keys. The pipeline hasn't cached any CVEs yet — this is normal before the first scheduled run.</span>
+                                <div className="card" style={{ padding: 20, marginTop: 16, borderColor: 'var(--warning)' }}>
+                                    <span style={{ color: 'var(--warning)' }}>
+                                        ⚠️ Redis is connected but has no <code>cve:*</code> keys yet.
+                                        This is normal before the first scheduled pipeline run.
+                                    </span>
                                 </div>
                             )}
                         </>
                     )}
+
                     {!redisInfo && !redisLoading && !redisError && (
                         <div className="card" style={{ padding: 40, textAlign: 'center' }}>
                             <button className="btn btn-primary" onClick={fetchRedis}>🔴 Inspect Redis Pool</button>
                         </div>
                     )}
-                </div>
-            )}
-        </div>
-    );
-}
-
-const LEVEL_COLORS = {
-    DEBUG: 'var(--text-muted)',
-    INFO: 'var(--info)',
-    WARNING: 'var(--warning)',
-    ERROR: 'var(--error)',
-};
-
-export default function Logs() {
-    const [logs, setLogs] = useState([]);
-    const [total, setTotal] = useState(0);
-    const [page, setPage] = useState(1);
-    const [loading, setLoading] = useState(true);
-    const [workerTypes, setWorkerTypes] = useState([]);
-    const [filters, setFilters] = useState({ worker_type: '', level: '', search: '' });
-    const [autoRefresh, setAutoRefresh] = useState(false);
-
-    const fetchLogs = useCallback(async () => {
-        try {
-            const data = await getLogs({ ...filters, page, per_page: 50 });
-            setLogs(data.items || []);
-            setTotal(data.total || 0);
-        } catch (e) { console.error(e); }
-        finally { setLoading(false); }
-    }, [filters, page]);
-
-    const fetchTypes = async () => {
-        try {
-            const data = await getWorkerTypes();
-            setWorkerTypes(data || []);
-        } catch (e) { console.error(e); }
-    };
-
-    useEffect(() => { fetchLogs(); fetchTypes(); }, [fetchLogs]);
-
-    useEffect(() => {
-        if (!autoRefresh) return;
-        const interval = setInterval(fetchLogs, 5000);
-        return () => clearInterval(interval);
-    }, [autoRefresh, fetchLogs]);
-
-    const handleClear = async (type) => {
-        if (!confirm(`Clear ${type || 'all'} logs?`)) return;
-        try {
-            await clearLogs(type);
-            fetchLogs();
-            fetchTypes();
-        } catch (e) { alert(e.message); }
-    };
-
-    const pages = Math.ceil(total / 50);
-
-    if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading logs...</div></div>;
-
-    return (
-        <div className="main-content animate-in">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                <div>
-                    <h1 className="header-title">📜 Worker Logs</h1>
-                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Monitor Celery worker activity and pipeline logs</p>
-                </div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                    <label className="toggle" title="Auto-refresh every 5s">
-                        <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
-                        <span className="toggle-slider" />
-                    </label>
-                    <span className="text-xs text-muted">Auto-refresh</span>
-                    <button className="btn btn-danger btn-sm" onClick={() => handleClear(filters.worker_type)}>
-                        🗑️ Clear {filters.worker_type || 'All'}
-                    </button>
-                </div>
-            </div>
-
-            {/* Worker type chips */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
-                <button
-                    className={`btn btn-sm ${!filters.worker_type ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => { setFilters(f => ({ ...f, worker_type: '' })); setPage(1); }}
-                >
-                    All ({total})
-                </button>
-                {workerTypes.map(wt => (
-                    <button
-                        key={wt.type}
-                        className={`btn btn-sm ${filters.worker_type === wt.type ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => { setFilters(f => ({ ...f, worker_type: wt.type })); setPage(1); }}
-                    >
-                        {wt.type} ({wt.count})
-                    </button>
-                ))}
-            </div>
-
-            {/* Level + search filters */}
-            <div className="card mb-20" style={{ padding: '12px 20px' }}>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <select
-                        className="form-select" style={{ width: 150 }}
-                        value={filters.level}
-                        onChange={e => { setFilters(f => ({ ...f, level: e.target.value })); setPage(1); }}
-                    >
-                        <option value="">All Levels</option>
-                        {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-                    </select>
-                    <input
-                        className="form-input" style={{ flex: 1, maxWidth: 400 }}
-                        placeholder="Search logs..." value={filters.search}
-                        onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
-                        onKeyDown={e => e.key === 'Enter' && fetchLogs()}
-                    />
-                    <button className="btn btn-secondary btn-sm" onClick={fetchLogs}>🔍 Search</button>
-                </div>
-            </div>
-
-            {/* Logs table */}
-            <div className="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th style={{ width: 160 }}>Timestamp</th>
-                            <th style={{ width: 100 }}>Worker</th>
-                            <th style={{ width: 80 }}>Level</th>
-                            <th>Message</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {logs.length === 0 ? (
-                            <tr><td colSpan={4} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No logs found</td></tr>
-                        ) : logs.map(log => (
-                            <tr key={log.id}>
-                                <td className="text-xs" style={{ fontFamily: 'monospace' }}>
-                                    {new Date(log.timestamp).toLocaleString()}
-                                </td>
-                                <td>
-                                    <span className="badge badge-info">{log.worker_type}</span>
-                                </td>
-                                <td>
-                                    <span style={{ color: LEVEL_COLORS[log.level] || 'var(--text-primary)', fontWeight: 600, fontSize: 12 }}>
-                                        {log.level}
-                                    </span>
-                                </td>
-                                <td>
-                                    <div className="text-sm">{log.message}</div>
-                                    {log.details && (
-                                        <details style={{ marginTop: 4 }}>
-                                            <summary className="text-xs text-muted" style={{ cursor: 'pointer' }}>Details</summary>
-                                            <pre style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'pre-wrap', marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
-                                                {log.details}
-                                            </pre>
-                                        </details>
-                                    )}
-                                    {log.task_id && (
-                                        <span className="text-xs text-muted" style={{ marginLeft: 8 }}>Task: {log.task_id}</span>
-                                    )}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            {/* Pagination */}
-            {pages > 1 && (
-                <div className="pagination">
-                    <button className="pagination-btn" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
-                    <span className="text-sm text-muted">Page {page} of {pages} ({total} logs)</span>
-                    <button className="pagination-btn" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>Next →</button>
                 </div>
             )}
         </div>
