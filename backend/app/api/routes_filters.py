@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -53,7 +53,8 @@ class FilterRuleUpdate(BaseModel):
 
 
 class TestFilterRequest(BaseModel):
-    """Test a filter rule against current DB."""
+    """Test a filter rule against ALL CVEs in DB."""
+    filter_id: Optional[int] = None  # Test an existing saved filter by ID
     name: str = "Test Rule"
     vendor: Optional[str] = None
     products: List[str] = []
@@ -65,7 +66,11 @@ class TestFilterRequest(BaseModel):
     cpe_vendor: Optional[str] = None
     alert_on_modified: bool = False
     conditions: Optional[Dict[str, Any]] = None
+    pql_query: Optional[str] = None
+    severity_mapping: Optional[Dict[str, Any]] = None
+    include_unknown: bool = False
     send_test_alert: bool = False
+    limit: int = Field(default=0, ge=0, description="Max CVEs to return (0 = all)")
 
 
 # ══════════════════════════════════════════════════════════
@@ -157,100 +162,147 @@ async def get_query_help():
 # ── Test Filter ──────────────────────────────────────────
 @router.post("/test")
 async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(get_db)):
-    """Test a filter rule against the database and optionally send a test alert."""
-    from app.engine.filter_engine import filter_cves
+    """Test a filter rule against ALL CVEs in the database."""
+    import time
+    from app.engine.filter_engine import match_cve_against_rule
     from app.engine.sources.base import NormalizedCVE
     from app.models.cve import CVE
-    from datetime import datetime
+    from sqlalchemy import select as sa_select
 
-    # Get recent CVEs from DB
-    result = await db.execute(
-        select(CVE).order_by(CVE.published_date.desc()).limit(500)
-    )
-    db_cves = result.scalars().all()
+    t_start = time.monotonic()
 
-    if not db_cves:
-        return {
-            "status": "no_data",
-            "message": "No CVEs in database to test against. Initialize DB first.",
-            "matches": [],
+    # If filter_id provided, load rule from DB
+    rule_dict = None
+    if data.filter_id:
+        result = await db.execute(sa_select(FilterRule).where(FilterRule.id == data.filter_id))
+        saved = result.scalar_one_or_none()
+        if not saved:
+            raise HTTPException(status_code=404, detail=f"Filter rule #{data.filter_id} not found")
+        rule_dict = {
+            "id": saved.id,
+            "name": saved.name,
+            "vendor": saved.vendor,
+            "products": saved.products or [],
+            "enabled": True,
+            "min_cvss": saved.min_cvss,
+            "max_cvss": saved.max_cvss,
+            "severity_filter": saved.severity_filter or [],
+            "keywords_include": saved.keywords_include or [],
+            "keywords_exclude": saved.keywords_exclude or [],
+            "cpe_vendor": saved.cpe_vendor,
+            "alert_on_modified": saved.alert_on_modified,
+            "conditions": saved.conditions,
+            "pql_query": getattr(saved, 'pql_query', None),
+            "severity_mapping": getattr(saved, 'severity_mapping', None),
+            "include_unknown": getattr(saved, 'include_unknown', False),
+        }
+    else:
+        rule_dict = {
+            "id": 0,
+            "name": data.name,
+            "vendor": data.vendor,
+            "products": data.products,
+            "enabled": True,
+            "min_cvss": data.min_cvss,
+            "max_cvss": data.max_cvss,
+            "severity_filter": data.severity_filter,
+            "keywords_include": data.keywords_include,
+            "keywords_exclude": data.keywords_exclude,
+            "cpe_vendor": data.cpe_vendor,
+            "alert_on_modified": data.alert_on_modified,
+            "conditions": data.conditions,
+            "pql_query": data.pql_query,
+            "severity_mapping": data.severity_mapping,
+            "include_unknown": data.include_unknown,
         }
 
-    # Convert DB records to NormalizedCVE for filter engine
-    cves = []
-    for c in db_cves:
-        cves.append(NormalizedCVE(
-            cve_id=c.cve_id,
-            vendor=c.vendor,
-            product=c.product,
-            description=c.description,
-            severity=c.severity,
-            cvss_score=c.cvss_score,
-            cvss_vector=c.cvss_vector,
-            source=c.source,
-            sources=c.sources or [],
-            published_date=c.published_date,
-            modified_date=c.modified_date,
-            kev_flag=c.kev_flag,
-            cpe_names=c.cpe_names or [],
-            references=c.references or [],
-            weaknesses=c.weaknesses or [],
-            affected_products=c.affected_products or [],
-        ))
+    # Count total CVEs
+    total_count_result = await db.execute(sa_select(func.count()).select_from(CVE))
+    total_cves = total_count_result.scalar() or 0
 
-    # Build test rule
-    rule = {
-        "id": 0,
-        "name": data.name,
-        "vendor": data.vendor,
-        "products": data.products,
-        "enabled": True,
-        "min_cvss": data.min_cvss,
-        "max_cvss": data.max_cvss,
-        "severity_filter": data.severity_filter,
-        "keywords_include": data.keywords_include,
-        "keywords_exclude": data.keywords_exclude,
-        "cpe_vendor": data.cpe_vendor,
-        "alert_on_modified": data.alert_on_modified,
-        "conditions": data.conditions,
-    }
+    if total_cves == 0:
+        return {
+            "status": "no_data",
+            "message": "No CVEs in database. Initialize DB first.",
+            "total_tested": 0,
+            "matches": 0,
+            "matched_cves": [],
+            "elapsed_seconds": 0,
+        }
 
-    matches = filter_cves(cves, [rule])
+    # Scan ALL CVEs in batches
+    BATCH = 2000
+    matched_cves = []
+    offset = 0
 
-    # Send test alert if requested and matches found
-    if data.send_test_alert and matches:
+    while True:
+        batch_result = await db.execute(
+            sa_select(CVE).order_by(CVE.id).offset(offset).limit(BATCH)
+        )
+        batch = batch_result.scalars().all()
+        if not batch:
+            break
+
+        for c in batch:
+            cve = NormalizedCVE(
+                cve_id=c.cve_id,
+                vendor=c.vendor,
+                product=c.product,
+                description=c.description,
+                severity=c.severity,
+                cvss_score=c.cvss_score,
+                cvss_vector=c.cvss_vector,
+                source=c.source,
+                sources=c.sources or [],
+                published_date=c.published_date,
+                modified_date=c.modified_date,
+                kev_flag=c.kev_flag,
+                cpe_names=c.cpe_names or [],
+                references=c.references or [],
+                weaknesses=c.weaknesses or [],
+                affected_products=c.affected_products or [],
+            )
+            match = match_cve_against_rule(cve, rule_dict)
+            if match:
+                matched_cves.append({
+                    "cve_id": c.cve_id,
+                    "vendor": c.vendor,
+                    "product": c.product,
+                    "severity": c.severity,
+                    "cvss_score": c.cvss_score,
+                    "source": c.source,
+                    "kev_flag": c.kev_flag,
+                    "description": (c.description or "")[:300],
+                    "published_date": c.published_date.isoformat() if c.published_date else None,
+                })
+
+        offset += BATCH
+        if len(batch) < BATCH:
+            break
+
+    elapsed = round(time.monotonic() - t_start, 2)
+
+    # Optional: apply return limit
+    returned = matched_cves[:data.limit] if data.limit else matched_cves
+
+    # Send test alert if requested
+    if data.send_test_alert and matched_cves:
         try:
             from app.services.smtp_service import send_cve_alert
-            first_match = matches[0].cve
-            cve_dict = {
-                "cve_id": first_match.cve_id,
-                "vendor": first_match.vendor,
-                "product": first_match.product,
-                "description": first_match.description,
-                "severity": first_match.severity,
-                "cvss_score": first_match.cvss_score,
-                "source": first_match.source,
-                "kev_flag": first_match.kev_flag,
-            }
-            email_result = await send_cve_alert(cve_dict, rule_name=f"[TEST] {data.name}")
-            logger.info(f"Test alert sent: {email_result}")
+            cve_dict = matched_cves[0].copy()
+            await send_cve_alert(cve_dict, rule_name=f"[TEST] {rule_dict['name']}")
+            logger.info(f"Test alert sent for {cve_dict['cve_id']}")
         except Exception as e:
-            logger.error(f"Test alert send failed: {e}", exc_info=True)
+            logger.error(f"Test alert failed: {e}", exc_info=True)
 
     return {
         "status": "ok",
-        "total_tested": len(cves),
-        "matches": len(matches),
-        "matched_cves": [
-            {
-                "cve_id": m.cve.cve_id,
-                "vendor": m.cve.vendor,
-                "product": m.cve.product,
-                "severity": m.cve.severity,
-                "cvss_score": m.cve.cvss_score,
-            }
-            for m in matches[:20]
-        ],
+        "rule_name": rule_dict["name"],
+        "total_tested": total_cves,
+        "matches": len(matched_cves),
+        "returned": len(returned),
+        "elapsed_seconds": elapsed,
+        "matched_cves": returned,
     }
 
 
