@@ -46,8 +46,7 @@ async def test_filter(db: AsyncSession = Depends(get_db)):
     """Test the filter engine with current rules against recent CVEs."""
     from app.engine.sources.nvd import NVDSource
     from app.engine.filter_engine import filter_cves
-    from app.models.filter_rule import FilterRule
-    from sqlalchemy import select
+    from app.engine.rule_loader import get_rules
     from datetime import datetime, timedelta
 
     # Fetch recent CVEs
@@ -58,9 +57,8 @@ async def test_filter(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         return {"step": "filter", "status": "error", "error": f"Fetch failed: {e}"}
 
-    # Load rules
-    result = await db.execute(select(FilterRule).where(FilterRule.enabled == True))
-    rules = [r.to_dict() for r in result.scalars().all()]
+    # Load rules from config file
+    rules = [r for r in get_rules() if r.get("enabled", True)]
 
     if not rules:
         return {"step": "filter", "status": "warning", "message": "No active filter rules configured"}
@@ -124,11 +122,9 @@ async def test_full_chain(db: AsyncSession = Depends(get_db)):
 
     # Step 3: Filter test
     from app.engine.filter_engine import filter_cves
-    from app.models.filter_rule import FilterRule
-    from sqlalchemy import select
+    from app.engine.rule_loader import get_rules
 
-    rule_result = await db.execute(select(FilterRule).where(FilterRule.enabled == True))
-    rules = [r.to_dict() for r in rule_result.scalars().all()]
+    rules = [r for r in get_rules() if r.get("enabled", True)]
     matches = filter_cves(cves, rules) if rules else []
     results.append({"step": "filter", "status": "ok", "matches": len(matches), "rules": len(rules)})
 

@@ -26,6 +26,12 @@ async def lifespan(app: FastAPI):
     # Initialize database tables
     await init_db()
     logger.info("✅ Database tables initialized")
+    # Load filter rules from YAML config file
+    from app.engine.rule_loader import load_rules, set_rules_path
+    if settings.rules_file_path:
+        set_rules_path(settings.rules_file_path)
+    load_rules()
+    logger.info("✅ Filter rules loaded from config file")
     yield
     logger.info("🛡️  AbuseCVE (≖_≖ ) — Shutting down...")
 

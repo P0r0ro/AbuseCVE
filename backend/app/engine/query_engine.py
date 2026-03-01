@@ -410,116 +410,230 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
     return None
 
 
+def _tokenize_pql(pql: str) -> List[str]:
+    """Tokenize a PQL string into a flat list of tokens.
+
+    Handles:
+    - Parentheses as standalone grouping tokens
+    - Quoted values (field:~"regex with parens") kept intact within tokens
+    - Whitespace as delimiter (outside quotes)
+    """
+    tokens: List[str] = []
+    i = 0
+    n = len(pql)
+
+    while i < n:
+        c = pql[i]
+
+        # Skip whitespace
+        if c in " \t\n\r":
+            i += 1
+            continue
+
+        # Standalone grouping parentheses
+        if c == "(":
+            tokens.append("(")
+            i += 1
+            continue
+        if c == ")":
+            tokens.append(")")
+            i += 1
+            continue
+
+        # Accumulate a token until whitespace or unquoted paren
+        j = i
+        while j < n and pql[j] not in " \t\n\r()":
+            if pql[j] in ('"', "'"):
+                # Consume entire quoted segment (may contain parens/spaces)
+                quote = pql[j]
+                j += 1
+                while j < n and pql[j] != quote:
+                    j += 1
+                if j < n:
+                    j += 1  # past closing quote
+            else:
+                j += 1
+
+        tokens.append(pql[i:j])
+        i = j
+
+    return tokens
+
+
+def _parse_pql_expression(tokens: List[str], pos: List[int]) -> dict:
+    """Parse: term (OR term)*   — OR has lowest precedence."""
+    left = _parse_pql_term(tokens, pos)
+    parts = [left]
+
+    while pos[0] < len(tokens) and tokens[pos[0]].upper() == "OR":
+        pos[0] += 1  # consume OR
+        parts.append(_parse_pql_term(tokens, pos))
+
+    if len(parts) == 1:
+        return parts[0]
+    return {"logic": "OR", "conditions": parts}
+
+
+def _parse_pql_term(tokens: List[str], pos: List[int]) -> dict:
+    """Parse: factor (AND factor)*   — AND binds tighter than OR.
+
+    Implicit AND: two adjacent conditions without an explicit operator
+    are joined with AND (e.g.  ``vendor:forti cvss:>=7``).
+    """
+    left = _parse_pql_factor(tokens, pos)
+    parts = [left]
+
+    while pos[0] < len(tokens):
+        tok = tokens[pos[0]]
+        upper = tok.upper()
+        if upper == "AND":
+            pos[0] += 1  # explicit AND
+            parts.append(_parse_pql_factor(tokens, pos))
+        elif upper == "OR" or tok == ")":
+            break  # let the caller handle these
+        else:
+            # Implicit AND — next token is a condition/group, not a boolean op
+            parts.append(_parse_pql_factor(tokens, pos))
+
+    if len(parts) == 1:
+        return parts[0]
+    return {"logic": "AND", "conditions": parts}
+
+
+def _parse_pql_factor(tokens: List[str], pos: List[int]) -> dict:
+    """Parse: NOT factor | ( expression ) | condition_token."""
+    if pos[0] >= len(tokens):
+        return {}
+
+    tok = tokens[pos[0]]
+
+    # NOT prefix
+    if tok.upper() == "NOT":
+        pos[0] += 1
+        inner = _parse_pql_factor(tokens, pos)
+        return {"logic": "NOT", "conditions": [inner]}
+
+    # Parenthesised sub-expression
+    if tok == "(":
+        pos[0] += 1  # consume (
+        expr = _parse_pql_expression(tokens, pos)
+        if pos[0] < len(tokens) and tokens[pos[0]] == ")":
+            pos[0] += 1  # consume )
+        return expr
+
+    # Leaf condition token
+    pos[0] += 1
+    return _parse_pql_token(tok)
+
+
+def _parse_pql_token(token: str) -> dict:
+    """Convert a single token (field:value or bare word) into a condition dict."""
+    if ":" in token and not token.startswith(":"):
+        field, _, value = token.partition(":")
+        # Strip outer quotes from value
+        for q in ('"', "'"):
+            if value.startswith(q) and value.endswith(q) and len(value) > 1:
+                value = value[1:-1]
+                break
+        cond = _pql_field_to_condition(field.lower(), value)
+        return cond or {}
+
+    # Bare word — search across all major text fields
+    word = token.strip('"').strip("'")
+    if not word or word.upper() in ("AND", "OR", "NOT"):
+        return {}
+    return {
+        "logic": "OR",
+        "conditions": [
+            {"field": "cve_id", "operator": "contains", "value": word},
+            {"field": "vendor", "operator": "contains", "value": word},
+            {"field": "product", "operator": "contains", "value": word},
+            {"field": "description", "operator": "contains", "value": word},
+        ],
+    }
+
+
 def parse_pql_to_conditions(pql_string: str) -> dict:
-    """Parse a PQL (Policy Query Language) string into conditions JSON.
+    """Parse a PQL (Policy Query Language) string into a conditions dict.
+
+    Uses a recursive-descent parser with proper operator precedence:
+      - OR  (lowest)
+      - AND (implicit between adjacent terms, or explicit)
+      - NOT (prefix, highest)
+      - ( ) grouping
 
     Supports:
-    - field:value (contains match)
-    - field:"exact phrase" (exact match for multi-word values)
-    - field:>N, field:<N, field:>=N, field:<=N (numeric comparisons)
-    - field:=value (exact match)
-    - field:~regex (regex match)
-    - field:!value (not contains)
-    - AND / OR / NOT boolean operators
-    - Bare words search across cve_id, vendor, product, description
+      field:value          contains match (case-insensitive)
+      field:"multi word"   contains match with spaces
+      field:=value         exact match
+      field:~pattern       regex match  (quote if pattern has parens)
+      field:!value         not-contains
+      field:>=N  >N <N <=N numeric comparisons
+      field:blank          field is null / empty
+      field:not_blank      field has a value
+      field:HIGH,CRITICAL  comma-separated OR of exact values
+      kev:true             boolean shorthand
+      AND OR NOT ( )       boolean logic with grouping
+
+    Field aliases:
+      id/cve/cveid → cve_id    desc → description
+      sev/level → severity      cvss/score → cvss_score
+      kev → kev_flag            pub → published_date  mod → modified_date
 
     Examples:
-        vendor:fortinet severity:CRITICAL cvss:>7.0
-        vendor:microsoft AND product:windows
-        description:"buffer overflow" OR description:"remote code execution"
-        kev:true severity:HIGH,CRITICAL
+      vendor:fortinet AND severity:CRITICAL,HIGH AND cvss:>=7.0
+      (vendor:~"(?i)forti(net)?" OR description:~"(?i)fortinet") AND cvss:>=3.0
+      kev:true AND NOT severity:LOW
     """
-    import re
-    import shlex
-
     pql_string = pql_string.strip()
     if not pql_string:
         return {}
 
-    # Try to split respecting quotes
-    try:
-        tokens = shlex.split(pql_string)
-    except ValueError:
-        tokens = pql_string.split()
-
-    conditions_list = []
-    i = 0
-
-    while i < len(tokens):
-        token = tokens[i]
-
-        # Skip boolean operators (we'll handle them later)
-        if token.upper() in ("AND", "OR", "NOT"):
-            i += 1
-            continue
-
-        # Check for field:value pattern
-        if ":" in token and not token.startswith(":"):
-            field, _, value = token.partition(":")
-
-            # Handle quoted values that were split
-            if value.startswith('"') and not value.endswith('"'):
-                # Recombine quoted value
-                parts = [value]
-                i += 1
-                while i < len(tokens) and not tokens[i].endswith('"'):
-                    parts.append(tokens[i])
-                    i += 1
-                if i < len(tokens):
-                    parts.append(tokens[i])
-                value = " ".join(parts).strip('"')
-            else:
-                value = value.strip('"').strip("'")
-
-            condition = _pql_field_to_condition(field.lower(), value)
-            if condition:
-                conditions_list.append(condition)
-        else:
-            # Bare word — search across all text fields
-            word = token.strip('"').strip("'")
-            if word:
-                conditions_list.append({
-                    "logic": "OR",
-                    "conditions": [
-                        {"field": "cve_id", "operator": "contains", "value": word},
-                        {"field": "vendor", "operator": "contains", "value": word},
-                        {"field": "product", "operator": "contains", "value": word},
-                        {"field": "description", "operator": "contains", "value": word},
-                    ]
-                })
-
-        i += 1
-
-    if not conditions_list:
+    tokens = _tokenize_pql(pql_string)
+    if not tokens:
         return {}
 
-    # Check if original query uses OR
-    if " OR " in pql_string.upper():
-        return {"logic": "OR", "conditions": conditions_list}
+    pos = [0]
+    result = _parse_pql_expression(tokens, pos)
+    return result or {}
 
-    if len(conditions_list) == 1:
-        return conditions_list[0]
 
-    return {"logic": "AND", "conditions": conditions_list}
+# ── PQL field:value helpers ────────────────────────────────
+
+# Reusable alias map
+PQL_FIELD_ALIASES: Dict[str, str] = {
+    "id": "cve_id", "cve": "cve_id", "cveid": "cve_id",
+    "desc": "description", "descr": "description",
+    "sev": "severity", "level": "severity",
+    "score": "cvss_score", "cvss": "cvss_score",
+    "src": "source",
+    "kev": "kev_flag",
+    "pub": "published_date", "published": "published_date",
+    "mod": "modified_date", "modified": "modified_date",
+    "vec": "cvss_vector", "vector": "cvss_vector",
+}
+
+
+def _strip_quotes(v: str) -> str:
+    """Remove surrounding quotes from a value string."""
+    for q in ('"', "'"):
+        if v.startswith(q) and v.endswith(q) and len(v) > 1:
+            return v[1:-1]
+    return v
 
 
 def _pql_field_to_condition(field: str, value: str) -> dict | None:
     """Convert a single PQL field:value pair to a condition dict."""
-    # Field aliases
-    field_map = {
-        "id": "cve_id", "cve": "cve_id", "cveid": "cve_id",
-        "desc": "description", "descr": "description",
-        "sev": "severity", "level": "severity",
-        "score": "cvss_score", "cvss": "cvss_score",
-        "src": "source",
-        "kev": "kev_flag",
-        "pub": "published_date", "published": "published_date",
-        "mod": "modified_date", "modified": "modified_date",
-        "vec": "cvss_vector", "vector": "cvss_vector",
-    }
-    field = field_map.get(field, field)
+    field = PQL_FIELD_ALIASES.get(field, field)
 
-    # Numeric comparisons
+    # Special operators: blank / not_blank
+    val_lower = value.lower().strip()
+    if val_lower == "blank":
+        return {"field": field, "operator": "blank"}
+    if val_lower in ("not_blank", "notblank"):
+        return {"field": field, "operator": "not_blank"}
+
+    # Numeric comparisons (must check >= / <= before > / <)
     if value.startswith(">="):
         return {"field": field, "operator": "gte", "value": float(value[2:])}
     if value.startswith("<="):
@@ -531,17 +645,17 @@ def _pql_field_to_condition(field: str, value: str) -> dict | None:
 
     # Exact match
     if value.startswith("="):
-        return {"field": field, "operator": "equal", "value": value[1:]}
+        return {"field": field, "operator": "equal", "value": _strip_quotes(value[1:])}
 
     # Regex match
     if value.startswith("~"):
-        return {"field": field, "operator": "regex", "value": value[1:]}
+        return {"field": field, "operator": "regex", "value": _strip_quotes(value[1:])}
 
     # NOT match
     if value.startswith("!"):
-        return {"field": field, "operator": "not_contains", "value": value[1:]}
+        return {"field": field, "operator": "not_contains", "value": _strip_quotes(value[1:])}
 
-    # Comma-separated values (OR)
+    # Comma-separated values → OR of exact matches
     if "," in value:
         values = [v.strip() for v in value.split(",") if v.strip()]
         return {
@@ -549,7 +663,7 @@ def _pql_field_to_condition(field: str, value: str) -> dict | None:
             "conditions": [
                 {"field": field, "operator": "equal", "value": v}
                 for v in values
-            ]
+            ],
         }
 
     # Boolean fields
@@ -557,4 +671,4 @@ def _pql_field_to_condition(field: str, value: str) -> dict | None:
         return {"field": field, "operator": "equal", "value": value.lower() in ("true", "1", "yes")}
 
     # Default: contains match
-    return {"field": field, "operator": "contains", "value": value}
+    return {"field": field, "operator": "contains", "value": _strip_quotes(value)}

@@ -15,7 +15,6 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 import redis.asyncio as aioredis
-from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -26,7 +25,7 @@ from app.engine.sources.redhat import RedHatSource
 from app.engine.sources.base import NormalizedCVE
 from app.engine.filter_engine import filter_cves, FilterMatch
 from app.engine.dedup import dedup_and_store, dedup_and_store_bulk
-from app.models.filter_rule import FilterRule
+from app.engine.rule_loader import get_rules
 from app.models.cve import CVE
 
 logger = logging.getLogger(__name__)
@@ -195,11 +194,8 @@ class CVEPipeline:
 
         logger.info(f"Pipeline PROCESS: {len(cves)} CVEs from pool")
 
-        # Load active filter rules
-        result = await session.execute(
-            select(FilterRule).where(FilterRule.enabled == True)
-        )
-        rules = [r.to_dict() for r in result.scalars().all()]
+        # Load active filter rules from config file
+        rules = [r for r in get_rules() if r.get("enabled", True)]
 
         if not rules:
             logger.warning("No active filter rules — storing all CVEs to DB without alerting")

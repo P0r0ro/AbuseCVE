@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change_me")
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
+    rules_file_path: str = Field(default="", description="Path to filter rules YAML (auto-detected if empty)")
 
     @property
     def sync_database_url(self) -> str:

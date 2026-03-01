@@ -45,38 +45,12 @@ export const initializeDBLocal = (mitreDir, nvdDir) =>
 export const triggerScan = () => request('/dashboard/trigger-scan', { method: 'POST' });
 export const getTaskStatus = (taskId) => request(`/dashboard/task-status/${taskId}`);
 
-// ── Filters ──────────────────────────────────
+// ── Filters (read-only, file-based rules) ───
 export const getFilters = () => request('/filters');
 export const getFilter = (id) => request(`/filters/${id}`);
-export const createFilter = (data) => request('/filters', { method: 'POST', body: data });
-export const updateFilter = (id, data) => request(`/filters/${id}`, { method: 'PUT', body: data });
-export const deleteFilter = (id) => request(`/filters/${id}`, { method: 'DELETE' });
-export const toggleFilter = (id) => request(`/filters/${id}/toggle`, { method: 'POST' });
 export const testFilterRule = (data) => request('/filters/test', { method: 'POST', body: data });
+export const reloadFilterRules = () => request('/filters/reload', { method: 'POST' });
 export const getQueryHelp = () => request('/filters/query-help');
-
-export const exportFiltersYAML = async () => {
-    const res = await requestRaw('/filters/export/yaml');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'abusecve_filters.yaml';
-    a.click();
-    URL.revokeObjectURL(url);
-};
-
-export const importFiltersYAML = async (file) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    const url = `${API_BASE}/filters/import/yaml`;
-    const res = await fetch(url, { method: 'POST', body: formData });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-    }
-    return res.json();
-};
 
 // ── CVEs ─────────────────────────────────────
 export const getCVEs = (params = {}) => {

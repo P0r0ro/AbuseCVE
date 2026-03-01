@@ -1,255 +1,54 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-    getFilters, createFilter, updateFilter, deleteFilter, toggleFilter,
-    testFilterRule, exportFiltersYAML, importFiltersYAML, getQueryHelp
-} from '../api';
-
-const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+import React, { useState, useEffect } from 'react';
+import { getFilters, testFilterRule, reloadFilterRules, getQueryHelp } from '../api';
 
 export default function Filters() {
-    const [filters, setFilters] = useState([]);
+    const [rules, setRules] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showEditor, setShowEditor] = useState(false);
-    const [editId, setEditId] = useState(null);
-    const [testResult, setTestResult] = useState(null);
     const [showHelp, setShowHelp] = useState(false);
     const [helpData, setHelpData] = useState(null);
-    const [importStatus, setImportStatus] = useState('');
-    const [quickTestId, setQuickTestId] = useState(null);
-    const [quickTestResult, setQuickTestResult] = useState({});
-    const fileInputRef = useRef(null);
+    const [testingId, setTestingId] = useState(null);
+    const [testResults, setTestResults] = useState({});
+    const [expandedId, setExpandedId] = useState(null);
+    const [reloadMsg, setReloadMsg] = useState('');
+    const [adHocPql, setAdHocPql] = useState('');
+    const [adHocResult, setAdHocResult] = useState(null);
+    const [adHocTesting, setAdHocTesting] = useState(false);
 
-    // Form state
-    const [form, setForm] = useState({
-        name: '',
-        vendor: '',
-        products: [],
-        enabled: true,
-        min_cvss: '',
-        max_cvss: '',
-        severity_filter: [],
-        keywords_include: [],
-        keywords_exclude: [],
-        cpe_vendor: '',
-        description: '',
-        alert_on_modified: false,
-        conditions: null,
-        severity_mapping: null,
-        include_unknown: false,
-        pql_query: '',
-    });
-    const [productInput, setProductInput] = useState('');
-    const [kwIncludeInput, setKwIncludeInput] = useState('');
-    const [kwExcludeInput, setKwExcludeInput] = useState('');
-
-    const fetchFilters = async () => {
+    const fetchRules = async () => {
         try {
             const data = await getFilters();
-            setFilters(data);
+            setRules(data);
         } catch (e) {
-            console.error('Failed to load filters:', e);
+            console.error('Failed to load rules:', e);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => { fetchFilters(); }, []);
+    useEffect(() => { fetchRules(); }, []);
 
-    const resetForm = () => {
-        setForm({
-            name: '', vendor: '', products: [], enabled: true,
-            min_cvss: '', max_cvss: '', severity_filter: [],
-            keywords_include: [], keywords_exclude: [], cpe_vendor: '',
-            description: '', alert_on_modified: false, conditions: null,
-            severity_mapping: null, include_unknown: false, pql_query: '',
-        });
-        setProductInput('');
-        setKwIncludeInput('');
-        setKwExcludeInput('');
-        setEditId(null);
-        setTestResult(null);
-    };
-
-    const handleEdit = (filter) => {
-        setForm({
-            name: filter.name || '',
-            vendor: filter.vendor || '',
-            products: filter.products || [],
-            enabled: filter.enabled !== false,
-            min_cvss: filter.min_cvss ?? '',
-            max_cvss: filter.max_cvss ?? '',
-            severity_filter: filter.severity_filter || [],
-            keywords_include: filter.keywords_include || [],
-            keywords_exclude: filter.keywords_exclude || [],
-            cpe_vendor: filter.cpe_vendor || '',
-            description: filter.description || '',
-            alert_on_modified: filter.alert_on_modified || false,
-            conditions: filter.conditions || null,
-            severity_mapping: filter.severity_mapping || null,
-            include_unknown: filter.include_unknown || false,
-            pql_query: filter.pql_query || '',
-        });
-        setEditId(filter.id);
-        setShowEditor(true);
-        setTestResult(null);
-    };
-
-    const handleSave = async () => {
-        const payload = {
-            ...form,
-            min_cvss: form.min_cvss !== '' ? parseFloat(form.min_cvss) : null,
-            max_cvss: form.max_cvss !== '' ? parseFloat(form.max_cvss) : null,
-            // Merge products into keywords_include (products become default include keywords)
-            keywords_include: [...new Set([...form.keywords_include, ...form.products.filter(p => !form.keywords_include.includes(p))])],
-            severity_mapping: form.severity_mapping,
-            include_unknown: form.include_unknown,
-            pql_query: form.pql_query || null,
-        };
+    const handleTest = async (ruleId) => {
+        setTestingId(ruleId);
         try {
-            if (editId) {
-                await updateFilter(editId, payload);
-            } else {
-                await createFilter(payload);
-            }
-            resetForm();
-            setShowEditor(false);
-            fetchFilters();
+            const result = await testFilterRule({ rule_id: ruleId });
+            setTestResults(prev => ({ ...prev, [ruleId]: result }));
         } catch (e) {
-            alert('Save failed: ' + e.message);
-        }
-    };
-
-    const handleDelete = async (id) => {
-        if (!confirm('Delete this filter rule?')) return;
-        try {
-            await deleteFilter(id);
-            fetchFilters();
-        } catch (e) {
-            alert('Delete failed: ' + e.message);
-        }
-    };
-
-    const handleToggle = async (id) => {
-        try {
-            await toggleFilter(id);
-            fetchFilters();
-        } catch (e) {
-            alert('Toggle failed: ' + e.message);
-        }
-    };
-
-    const addProduct = () => {
-        const val = productInput.trim();
-        if (val && !form.products.includes(val)) {
-            setForm(f => ({ ...f, products: [...f.products, val] }));
-        }
-        setProductInput('');
-    };
-
-    const removeProduct = (p) => {
-        setForm(f => ({ ...f, products: f.products.filter(x => x !== p) }));
-    };
-
-    const addKwInclude = () => {
-        const val = kwIncludeInput.trim();
-        if (val && !form.keywords_include.includes(val)) {
-            setForm(f => ({ ...f, keywords_include: [...f.keywords_include, val] }));
-        }
-        setKwIncludeInput('');
-    };
-
-    const removeKwInclude = (kw) => {
-        setForm(f => ({ ...f, keywords_include: f.keywords_include.filter(x => x !== kw) }));
-    };
-
-    const addKwExclude = () => {
-        const val = kwExcludeInput.trim();
-        if (val && !form.keywords_exclude.includes(val)) {
-            setForm(f => ({ ...f, keywords_exclude: [...f.keywords_exclude, val] }));
-        }
-        setKwExcludeInput('');
-    };
-
-    const removeKwExclude = (kw) => {
-        setForm(f => ({ ...f, keywords_exclude: f.keywords_exclude.filter(x => x !== kw) }));
-    };
-
-    const toggleSeverity = (sev) => {
-        setForm(f => {
-            const current = f.severity_filter || [];
-            if (current.includes(sev)) {
-                return { ...f, severity_filter: current.filter(s => s !== sev) };
-            }
-            return { ...f, severity_filter: [...current, sev] };
-        });
-    };
-
-    const handleTestFilter = async () => {
-        setTestResult({ loading: true });
-        try {
-            let payload;
-            if (editId) {
-                // Use filter_id so backend loads the full saved rule (including conditions)
-                payload = { filter_id: editId };
-            } else {
-                payload = {
-                    name: form.name || 'Test Rule',
-                    vendor: form.vendor || null,
-                    products: form.products,
-                    min_cvss: form.min_cvss ? parseFloat(form.min_cvss) : null,
-                    max_cvss: form.max_cvss ? parseFloat(form.max_cvss) : null,
-                    severity_filter: form.severity_filter,
-                    keywords_include: form.keywords_include,
-                    keywords_exclude: form.keywords_exclude,
-                    cpe_vendor: form.cpe_vendor || null,
-                    alert_on_modified: form.alert_on_modified,
-                    conditions: form.conditions || null,
-                    pql_query: form.pql_query || null,
-                    severity_mapping: form.severity_mapping || null,
-                    include_unknown: form.include_unknown,
-                    send_test_alert: false,
-                };
-            }
-            const result = await testFilterRule(payload);
-            setTestResult(result);
-        } catch (e) {
-            setTestResult({ status: 'error', message: e.message });
-        }
-    };
-
-
-    const handleExportYAML = async () => {
-        try {
-            await exportFiltersYAML();
-        } catch (e) {
-            alert('Export failed: ' + e.message);
-        }
-    };
-
-    const handleImportYAML = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        setImportStatus('Importing...');
-        try {
-            const result = await importFiltersYAML(file);
-            setImportStatus(`✅ ${result.message}`);
-            fetchFilters();
-        } catch (err) {
-            setImportStatus(`❌ Import failed: ${err.message}`);
-        }
-        if (fileInputRef.current) fileInputRef.current.value = '';
-    };
-
-    const handleQuickTest = async (filterId) => {
-        setQuickTestId(filterId);
-        try {
-            const result = await testFilterRule({ filter_id: filterId });
-            setQuickTestResult(prev => ({ ...prev, [filterId]: result }));
-        } catch (e) {
-            setQuickTestResult(prev => ({ ...prev, [filterId]: { status: 'error', message: e.message } }));
+            setTestResults(prev => ({ ...prev, [ruleId]: { status: 'error', message: e.message } }));
         } finally {
-            setQuickTestId(null);
+            setTestingId(null);
         }
+    };
+
+    const handleReload = async () => {
+        setReloadMsg('Reloading...');
+        try {
+            const result = await reloadFilterRules();
+            setReloadMsg(result.message);
+            fetchRules();
+        } catch (e) {
+            setReloadMsg('Reload failed: ' + e.message);
+        }
+        setTimeout(() => setReloadMsg(''), 5000);
     };
 
     const handleShowHelp = async () => {
@@ -264,287 +63,91 @@ export default function Filters() {
         setShowHelp(true);
     };
 
-    if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading filters...</div></div>;
+    const handleAdHocTest = async () => {
+        if (!adHocPql.trim()) return;
+        setAdHocTesting(true);
+        setAdHocResult(null);
+        try {
+            const result = await testFilterRule({ pql: adHocPql });
+            setAdHocResult(result);
+        } catch (e) {
+            setAdHocResult({ status: 'error', message: e.message });
+        } finally {
+            setAdHocTesting(false);
+        }
+    };
+
+    if (loading) return <div className="main-content"><div className="loading"><div className="loading-spinner" />Loading rules...</div></div>;
 
     return (
         <div className="main-content animate-in">
+            {/* Header */}
             <div className="header" style={{ marginBottom: 24, padding: 0, background: 'transparent', border: 'none', height: 'auto' }}>
                 <div>
                     <h1 className="header-title">Filter Rules</h1>
-                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Define CVE monitoring rules with advanced query support</p>
+                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+                        File-based rules loaded from <code>abusecve_filters.yaml</code> &mdash; edit on the server, then reload.
+                    </p>
                 </div>
                 <div className="header-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button className="btn btn-primary" onClick={() => { resetForm(); setShowEditor(true); }}>+ New Filter</button>
-                    <button className="btn btn-secondary" onClick={handleExportYAML}>📥 Export YAML</button>
-                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                        📤 Import YAML
-                        <input type="file" accept=".yaml,.yml,.json" ref={fileInputRef}
-                            onChange={handleImportYAML} style={{ display: 'none' }} />
-                    </label>
-                    <button className="btn btn-secondary" onClick={handleShowHelp} title="Query Language Help"
-                        style={{ padding: '8px 12px', fontSize: 16 }}>❓</button>
+                    <button className="btn btn-primary" onClick={handleReload}>Reload Rules</button>
+                    <button className="btn btn-secondary" onClick={handleShowHelp} title="PQL Syntax Reference"
+                        style={{ padding: '8px 12px', fontSize: 14 }}>? PQL Help</button>
                 </div>
             </div>
 
-            {importStatus && (
-                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: importStatus.includes('✅') ? 'var(--success)' : 'var(--error)' }}>
-                    <span className="text-sm">{importStatus}</span>
-                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-                        onClick={() => setImportStatus('')}>✕</button>
+            {reloadMsg && (
+                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: 'var(--border-accent)' }}>
+                    <span className="text-sm">{reloadMsg}</span>
                 </div>
             )}
 
-            {/* Filter Editor */}
-            {showEditor && (
-                <div className="card mb-24">
-                    <div className="card-header">
-                        <div className="card-title">{editId ? 'Edit Filter Rule' : 'New Filter Rule'}</div>
-                        <button className="btn btn-secondary" onClick={() => { setShowEditor(false); resetForm(); }}
-                            style={{ padding: '4px 12px', fontSize: 12 }}>✕ Close</button>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, padding: '0 20px 20px' }}>
-                        {/* Rule Name */}
-                        <div className="form-group">
-                            <label className="form-label">Rule Name *</label>
-                            <input className="form-input" placeholder="e.g., Fortinet Critical Alerts"
-                                value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-                        </div>
-                        {/* Vendor (text input, NOT dropdown) */}
-                        <div className="form-group">
-                            <label className="form-label">Vendor</label>
-                            <input className="form-input" placeholder="Type vendor name (e.g., fortinet, microsoft)"
-                                value={form.vendor} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} />
-                        </div>
-
-                        {/* Products + Include Keywords (merged) */}
-                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                            <label className="form-label">Products & Include Keywords</label>
-                            <p className="text-sm text-muted" style={{ marginBottom: 8 }}>Products are automatically included as keywords. Default keywords: CVE, vulnerability</p>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <input className="form-input" placeholder="Add product/keyword..."
-                                    value={productInput}
-                                    onChange={e => setProductInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addProduct(); } }} />
-                                <button className="btn btn-secondary" onClick={addProduct} style={{ whiteSpace: 'nowrap' }}>+ Add</button>
-                            </div>
-                            {form.products.length > 0 && (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                                    {form.products.map(p => (
-                                        <span key={p} className="badge" style={{
-                                            background: 'rgba(124,58,237,0.2)', color: '#A855F7', padding: '4px 10px',
-                                            cursor: 'pointer', borderRadius: 6,
-                                        }} onClick={() => removeProduct(p)}>
-                                            {p} ✕
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Additional Include Keywords */}
-                        <div className="form-group">
-                            <label className="form-label">Extra Include Keywords</label>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <input className="form-input" placeholder="Additional keyword..."
-                                    value={kwIncludeInput}
-                                    onChange={e => setKwIncludeInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKwInclude(); } }} />
-                                <button className="btn btn-secondary" onClick={addKwInclude}>+</button>
-                            </div>
-                            {form.keywords_include.length > 0 && (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                                    {form.keywords_include.map(kw => (
-                                        <span key={kw} className="badge" style={{
-                                            background: 'rgba(74,222,128,0.2)', color: '#4ADE80', padding: '4px 10px',
-                                            cursor: 'pointer', borderRadius: 6,
-                                        }} onClick={() => removeKwInclude(kw)}>
-                                            {kw} ✕
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Exclude Keywords */}
-                        <div className="form-group">
-                            <label className="form-label">Exclude Keywords</label>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <input className="form-input" placeholder="Keyword to exclude..."
-                                    value={kwExcludeInput}
-                                    onChange={e => setKwExcludeInput(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKwExclude(); } }} />
-                                <button className="btn btn-secondary" onClick={addKwExclude}>+</button>
-                            </div>
-                            {form.keywords_exclude.length > 0 && (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                                    {form.keywords_exclude.map(kw => (
-                                        <span key={kw} className="badge" style={{
-                                            background: 'rgba(255,68,68,0.2)', color: '#FF4444', padding: '4px 10px',
-                                            cursor: 'pointer', borderRadius: 6,
-                                        }} onClick={() => removeKwExclude(kw)}>
-                                            {kw} ✕
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Custom Severity via CVSS Range */}
-                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                            <label className="form-label">Custom Severity Level (CVSS Score Range)</label>
-                            <p className="text-xs text-muted" style={{ marginBottom: 8 }}>
-                                Set the minimum/maximum CVSS score to define what counts as a relevant severity.
-                                For conditions-based rules, CVSS constraints are embedded directly in the conditions block.
-                            </p>
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                <label className="text-sm" style={{ minWidth: 30 }}>Min</label>
-                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="0.0"
-                                    value={form.min_cvss} onChange={e => setForm(f => ({ ...f, min_cvss: e.target.value }))}
-                                    style={{ width: 90 }} />
-                                <span className="text-muted">–</span>
-                                <label className="text-sm" style={{ minWidth: 30 }}>Max</label>
-                                <input className="form-input" type="number" min="0" max="10" step="0.1" placeholder="10.0"
-                                    value={form.max_cvss} onChange={e => setForm(f => ({ ...f, max_cvss: e.target.value }))}
-                                    style={{ width: 90 }} />
-                                <span className="badge badge-info" style={{ marginLeft: 8 }}>
-                                    {form.min_cvss || '0'} – {form.max_cvss || '10'} CVSS
-                                </span>
-                            </div>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
-                                <input type="checkbox" checked={form.include_unknown}
-                                    onChange={e => setForm(f => ({ ...f, include_unknown: e.target.checked }))}
-                                    style={{ accentColor: 'var(--purple-400)' }} />
-                                <span className="text-sm">Include CVEs with no CVSS score (unrated/unknown)</span>
-                            </label>
-                        </div>
-
-
-                        {/* Alert on Modified / Updated CVE */}
-                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={form.alert_on_modified}
-                                        onChange={e => setForm(f => ({ ...f, alert_on_modified: e.target.checked }))}
-                                        style={{ accentColor: 'var(--purple-400)' }} />
-                                    <span>🔄 Alert when CVE is updated/modified</span>
-                                </label>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={form.enabled}
-                                        onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
-                                        style={{ accentColor: 'var(--purple-400)' }} />
-                                    <span>✅ Enabled</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        {/* Description */}
-                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                            <label className="form-label">Description</label>
-                            <textarea className="form-input" rows="2" placeholder="Optional description for this rule..."
-                                value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
-                        </div>
-
-                        {/* Advanced: PQL Query */}
-                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                            <label className="form-label">🔮 PQL Query (Advanced Filter Mode)</label>
-                            <textarea className="form-textarea" style={{ fontFamily: 'monospace', fontSize: 12 }}
-                                rows="3" placeholder='vendor:fortinet AND severity:CRITICAL,HIGH AND cvss:>7.0'
-                                value={form.pql_query} onChange={e => setForm(f => ({ ...f, pql_query: e.target.value }))} />
-                            <span className="text-xs text-muted">When set, PQL query takes precedence over standard fields. Supports: vendor, product, severity, cvss, kev, description.</span>
-                        </div>
-
-                        {/* Custom Severity Mapping */}
-                        <div className="form-group">
-                            <label className="form-label">Custom Severity Mapping</label>
-                            <div style={{ fontSize: 12 - 1 }}>
-                                {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(level => (
-                                    <div key={level} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                                        <span style={{ width: 70, fontWeight: 600, fontSize: 11 }}>{level}:</span>
-                                        <input className="form-input" type="number" step="0.1" min="0" max="10"
-                                            style={{ width: 70, padding: '4px 6px', fontSize: 11 }}
-                                            placeholder="Min"
-                                            value={form.severity_mapping?.[level]?.min ?? ''}
-                                            onChange={e => {
-                                                const val = e.target.value;
-                                                setForm(f => ({
-                                                    ...f,
-                                                    severity_mapping: {
-                                                        ...(f.severity_mapping || {}),
-                                                        [level]: { ...(f.severity_mapping?.[level] || {}), min: val ? parseFloat(val) : undefined }
-                                                    }
-                                                }));
-                                            }} />
-                                        <span className="text-xs text-muted">–</span>
-                                        <input className="form-input" type="number" step="0.1" min="0" max="10"
-                                            style={{ width: 70, padding: '4px 6px', fontSize: 11 }}
-                                            placeholder="Max"
-                                            value={form.severity_mapping?.[level]?.max ?? ''}
-                                            onChange={e => {
-                                                const val = e.target.value;
-                                                setForm(f => ({
-                                                    ...f,
-                                                    severity_mapping: {
-                                                        ...(f.severity_mapping || {}),
-                                                        [level]: { ...(f.severity_mapping?.[level] || {}), max: val ? parseFloat(val) : undefined }
-                                                    }
-                                                }));
-                                            }} />
-                                    </div>
-                                ))}
-                            </div>
-                            <span className="text-xs text-muted">Override default severity levels with custom CVSS score ranges.</span>
-                        </div>
-
-                        {/* Include Unknown */}
-                        <div className="form-group">
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 24 }}>
-                                <input type="checkbox" checked={form.include_unknown}
-                                    onChange={e => setForm(f => ({ ...f, include_unknown: e.target.checked }))}
-                                    style={{ accentColor: 'var(--purple-400)' }} />
-                                <span>❓ Include CVEs without CVSS scores (UNKNOWN severity)</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div style={{ display: 'flex', gap: 12, padding: '0 20px 20px', flexWrap: 'wrap' }}>
-                        <button className="btn btn-primary" onClick={handleSave}>
-                            {editId ? '💾 Update Rule' : '✨ Create Rule'}
-                        </button>
-                        <button className="btn btn-secondary" onClick={handleTestFilter}>
-                            🧪 Test Filter
-                        </button>
-                        <button className="btn btn-secondary" onClick={() => { setShowEditor(false); resetForm(); }}>
-                            Cancel
+            {/* Ad-hoc PQL Tester */}
+            <div className="card mb-24">
+                <div className="card-header">
+                    <div className="card-title">PQL Query Tester</div>
+                </div>
+                <div style={{ padding: '0 20px 20px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                            className="form-input"
+                            style={{ fontFamily: 'monospace', fontSize: 13, flex: 1 }}
+                            placeholder='vendor:fortinet AND cvss:>=7.0 AND severity:HIGH,CRITICAL'
+                            value={adHocPql}
+                            onChange={e => setAdHocPql(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleAdHocTest(); }}
+                        />
+                        <button className="btn btn-primary" onClick={handleAdHocTest} disabled={adHocTesting}
+                            style={{ whiteSpace: 'nowrap' }}>
+                            {adHocTesting ? 'Testing...' : 'Test PQL'}
                         </button>
                     </div>
-
-                    {/* Test Result */}
-                    {testResult && (
-                        <div className="card" style={{ margin: '0 20px 20px', padding: 16, borderColor: 'var(--border-accent)' }}>
-                            {testResult.loading ? (
-                                <div className="loading"><div className="loading-spinner" />Testing filter...</div>
-                            ) : testResult.status === 'error' ? (
-                                <div style={{ color: 'var(--error)' }}>❌ {testResult.message}</div>
+                    {adHocResult && (
+                        <div style={{ marginTop: 12 }}>
+                            {adHocResult.status === 'error' ? (
+                                <div style={{ color: 'var(--error)' }}>Error: {adHocResult.message}</div>
                             ) : (
                                 <div>
-                                    <div style={{ marginBottom: 8, fontWeight: 'bold', color: testResult.matches > 0 ? 'var(--success)' : 'var(--warning)' }}>
-                                        {testResult.matches > 0 ? `✅ ${testResult.matches} matches found` : '⚠️ No matches'}
+                                    <div style={{ fontWeight: 600, color: adHocResult.matches > 0 ? 'var(--success)' : 'var(--warning)' }}>
+                                        {adHocResult.matches > 0
+                                            ? `${adHocResult.matches.toLocaleString()} matches`
+                                            : 'No matches'}
                                         <span className="text-muted text-sm" style={{ marginLeft: 8 }}>
-                                            (tested against {testResult.total_tested} CVEs)
+                                            ({adHocResult.total_tested.toLocaleString()} CVEs scanned in {adHocResult.elapsed_seconds}s)
                                         </span>
                                     </div>
-                                    {testResult.matched_cves && testResult.matched_cves.length > 0 && (
-                                        <div className="table-container" style={{ maxHeight: 200, overflow: 'auto' }}>
+                                    {adHocResult.matched_cves && adHocResult.matched_cves.length > 0 && (
+                                        <div className="table-container" style={{ maxHeight: 200, overflow: 'auto', marginTop: 8 }}>
                                             <table>
-                                                <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th></tr></thead>
+                                                <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th><th>KEV</th></tr></thead>
                                                 <tbody>
-                                                    {testResult.matched_cves.map(c => (
+                                                    {adHocResult.matched_cves.slice(0, 20).map(c => (
                                                         <tr key={c.cve_id}>
                                                             <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{c.cve_id}</td>
-                                                            <td>{c.vendor || '—'}</td>
+                                                            <td>{c.vendor || '\u2014'}</td>
                                                             <td><span className={`badge badge-${(c.severity || 'unknown').toLowerCase()}`}>{c.severity || 'N/A'}</span></td>
-                                                            <td className="text-mono">{c.cvss_score ?? '—'}</td>
+                                                            <td className="text-mono">{c.cvss_score ?? '\u2014'}</td>
+                                                            <td>{c.kev_flag ? 'Yes' : '\u2014'}</td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -556,91 +159,136 @@ export default function Filters() {
                         </div>
                     )}
                 </div>
-            )}
+            </div>
 
-            {/* Filter List */}
+            {/* Rules Table */}
             <div className="card">
                 <div className="card-header">
-                    <div className="card-title">Active Rules ({filters.length})</div>
+                    <div className="card-title">Loaded Rules ({rules.length})</div>
                 </div>
                 <div className="table-container">
                     <table>
                         <thead>
                             <tr>
+                                <th style={{ width: 70 }}>ID</th>
                                 <th>Name</th>
-                                <th>Vendor</th>
-                                <th>Products</th>
-                                <th>Severity</th>
-                                <th>CVSS Range</th>
-                                <th>Modified Alert</th>
                                 <th>Status</th>
-                                <th>Actions</th>
+                                <th style={{ width: 100 }}>Modified Alert</th>
+                                <th style={{ width: 120 }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {filters.map(f => (
-                                <tr key={f.id}>
-                                    <td style={{ fontWeight: 600 }}>{f.name}</td>
-                                    <td className="text-sm">{f.vendor || '—'}</td>
-                                    <td className="text-sm">
-                                        {(f.products || []).length > 0
-                                            ? (f.products || []).slice(0, 3).join(', ') + (f.products.length > 3 ? ` +${f.products.length - 3}` : '')
-                                            : '—'}
-                                    </td>
-                                    <td>
-                                        {(f.severity_filter || []).length > 0
-                                            ? (f.severity_filter || []).map(s => (
-                                                <span key={s} className={`badge badge-${s.toLowerCase()}`} style={{ marginRight: 4, fontSize: 10 }}>{s}</span>
-                                            ))
-                                            : '—'}
-                                    </td>
-                                    <td className="text-mono text-sm">
-                                        {f.min_cvss != null || f.max_cvss != null
-                                            ? `${f.min_cvss ?? 0} – ${f.max_cvss ?? 10}`
-                                            : '—'}
-                                    </td>
-                                    <td>{f.alert_on_modified ? '🔄 Yes' : '—'}</td>
-                                    <td>
-                                        <span className={`badge ${f.enabled ? 'badge-success' : 'badge-error'}`}
-                                            style={{ cursor: 'pointer' }} onClick={() => handleToggle(f.id)}>
-                                            {f.enabled ? 'Active' : 'Disabled'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div style={{ display: 'flex', gap: 6 }}>
-                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
-                                                onClick={() => handleEdit(f)}>✏️ Edit</button>
+                            {rules.map(r => (
+                                <React.Fragment key={r.id}>
+                                    <tr style={{ cursor: 'pointer' }} onClick={() => setExpandedId(expandedId === r.id ? null : r.id)}>
+                                        <td className="text-mono" style={{ fontWeight: 700, color: 'var(--purple-400)' }}>{r.id}</td>
+                                        <td>
+                                            <div style={{ fontWeight: 600 }}>{r.name}</div>
+                                            {r.description && (
+                                                <div className="text-xs text-muted" style={{ marginTop: 2, maxWidth: 500 }}>
+                                                    {r.description.length > 120 ? r.description.slice(0, 120) + '...' : r.description}
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td>
+                                            <span className={`badge ${r.enabled ? 'badge-success' : 'badge-error'}`}>
+                                                {r.enabled ? 'Active' : 'Disabled'}
+                                            </span>
+                                        </td>
+                                        <td>{r.alert_on_modified ? 'Yes' : '\u2014'}</td>
+                                        <td>
                                             <button
                                                 className="btn btn-secondary"
-                                                style={{ padding: '4px 10px', fontSize: 12, color: 'var(--purple-400)' }}
-                                                disabled={quickTestId === f.id}
-                                                onClick={() => handleQuickTest(f.id)}>
-                                                {quickTestId === f.id ? '⏳' : '🧪 Test'}
+                                                style={{ padding: '4px 12px', fontSize: 12, color: 'var(--purple-400)' }}
+                                                disabled={testingId === r.id}
+                                                onClick={(e) => { e.stopPropagation(); handleTest(r.id); }}>
+                                                {testingId === r.id ? 'Testing...' : 'Test'}
                                             </button>
-                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
-                                                onClick={() => handleDelete(f.id)}>🗑️</button>
-                                        </div>
-                                        {/* Inline quick test result */}
-                                        {quickTestResult[f.id] && (
-                                            <div style={{ marginTop: 4, fontSize: 11, maxWidth: 240 }}>
-                                                {quickTestResult[f.id].status === 'error'
-                                                    ? <span style={{ color: 'var(--error)' }}>❌ {quickTestResult[f.id].message}</span>
-                                                    : <span style={{ color: quickTestResult[f.id].matches > 0 ? 'var(--success)' : 'var(--warning)' }}>
-                                                        {quickTestResult[f.id].matches > 0
-                                                            ? `✅ ${quickTestResult[f.id].matches.toLocaleString()} matches of ${quickTestResult[f.id].total_tested.toLocaleString()} CVEs (${quickTestResult[f.id].elapsed_seconds}s)`
-                                                            : `⚠ 0 matches of ${quickTestResult[f.id].total_tested?.toLocaleString()} CVEs`
-                                                        }
-                                                    </span>
-                                                }
-                                            </div>
-                                        )}
-                                    </td>
-
-                                </tr>
+                                        </td>
+                                    </tr>
+                                    {/* Expanded detail row */}
+                                    {expandedId === r.id && (
+                                        <tr>
+                                            <td colSpan="5" style={{ padding: 0 }}>
+                                                <div style={{ padding: '16px 20px', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid var(--border)' }}>
+                                                    <div style={{ marginBottom: 8 }}>
+                                                        <span className="text-xs text-muted" style={{ display: 'block', marginBottom: 4 }}>PQL Query:</span>
+                                                        <pre style={{
+                                                            fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap',
+                                                            padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 6,
+                                                            color: '#A855F7', margin: 0, lineHeight: 1.5,
+                                                        }}>
+                                                            {r.pql || '(no PQL query)'}
+                                                        </pre>
+                                                    </div>
+                                                    {r.description && (
+                                                        <div className="text-sm text-muted" style={{ marginTop: 8 }}>{r.description}</div>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {/* Inline test result */}
+                                    {testResults[r.id] && (
+                                        <tr>
+                                            <td colSpan="5" style={{ padding: 0 }}>
+                                                <div style={{
+                                                    padding: '12px 20px',
+                                                    background: 'rgba(0,0,0,0.1)',
+                                                    borderTop: '1px solid var(--border)',
+                                                }}>
+                                                    {testResults[r.id].status === 'error' ? (
+                                                        <span style={{ color: 'var(--error)', fontSize: 13 }}>
+                                                            Error: {testResults[r.id].message}
+                                                        </span>
+                                                    ) : (
+                                                        <div>
+                                                            <span style={{
+                                                                fontWeight: 600, fontSize: 13,
+                                                                color: testResults[r.id].matches > 0 ? 'var(--success)' : 'var(--warning)',
+                                                            }}>
+                                                                {testResults[r.id].matches > 0
+                                                                    ? `${testResults[r.id].matches.toLocaleString()} matches`
+                                                                    : 'No matches'}
+                                                            </span>
+                                                            <span className="text-muted text-sm" style={{ marginLeft: 8 }}>
+                                                                ({testResults[r.id].total_tested?.toLocaleString()} CVEs in {testResults[r.id].elapsed_seconds}s)
+                                                            </span>
+                                                            {testResults[r.id].matched_cves && testResults[r.id].matched_cves.length > 0 && (
+                                                                <div className="table-container" style={{ maxHeight: 200, overflow: 'auto', marginTop: 8 }}>
+                                                                    <table>
+                                                                        <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th><th>KEV</th></tr></thead>
+                                                                        <tbody>
+                                                                            {testResults[r.id].matched_cves.slice(0, 20).map(c => (
+                                                                                <tr key={c.cve_id}>
+                                                                                    <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{c.cve_id}</td>
+                                                                                    <td>{c.vendor || '\u2014'}</td>
+                                                                                    <td><span className={`badge badge-${(c.severity || 'unknown').toLowerCase()}`}>{c.severity || 'N/A'}</span></td>
+                                                                                    <td className="text-mono">{c.cvss_score ?? '\u2014'}</td>
+                                                                                    <td>{c.kev_flag ? 'Yes' : '\u2014'}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    <button
+                                                        className="text-xs"
+                                                        style={{ marginTop: 6, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                                                        onClick={() => setTestResults(prev => { const n = { ...prev }; delete n[r.id]; return n; })}>
+                                                        Dismiss
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </React.Fragment>
                             ))}
-                            {filters.length === 0 && (
-                                <tr><td colSpan="8" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-                                    No filter rules yet. Create one or import from YAML.
+                            {rules.length === 0 && (
+                                <tr><td colSpan="5" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
+                                    No rules loaded. Check abusecve_filters.yaml on the server.
                                 </td></tr>
                             )}
                         </tbody>
@@ -648,7 +296,7 @@ export default function Filters() {
                 </div>
             </div>
 
-            {/* Query Help Modal */}
+            {/* PQL Help Modal */}
             {showHelp && (
                 <div style={{
                     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -657,54 +305,50 @@ export default function Filters() {
                 }} onClick={() => setShowHelp(false)}>
                     <div style={{
                         background: 'var(--card-bg)', borderRadius: 12, padding: 30,
-                        maxWidth: 800, maxHeight: '80vh', overflow: 'auto', width: '100%',
+                        maxWidth: 700, maxHeight: '80vh', overflow: 'auto', width: '100%',
                         border: '1px solid var(--border-accent)',
                     }} onClick={e => e.stopPropagation()}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
-                            <h2 style={{ color: 'var(--purple-400)', margin: 0 }}>📖 Query Language Reference</h2>
+                            <h2 style={{ color: 'var(--purple-400)', margin: 0 }}>PQL Syntax Reference</h2>
                             <button className="btn btn-secondary" onClick={() => setShowHelp(false)}
-                                style={{ padding: '4px 12px' }}>✕</button>
+                                style={{ padding: '4px 12px' }}>X</button>
                         </div>
 
                         {helpData ? (
                             <div>
-                                <h3>Operators</h3>
+                                <h3>Syntax</h3>
                                 <div className="table-container">
                                     <table>
-                                        <thead><tr><th>Operator</th><th>Description</th></tr></thead>
+                                        <thead><tr><th>Pattern</th><th>Description</th><th>Example</th></tr></thead>
                                         <tbody>
-                                            {helpData.operators?.map(op => (
-                                                <tr key={op.name}>
-                                                    <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{op.name}</td>
-                                                    <td className="text-sm">{op.description}</td>
+                                            {helpData.pql_syntax?.map((s, i) => (
+                                                <tr key={i}>
+                                                    <td className="text-mono" style={{ color: 'var(--purple-400)', whiteSpace: 'nowrap' }}>{s.syntax}</td>
+                                                    <td className="text-sm">{s.description}</td>
+                                                    <td className="text-mono text-xs">{s.example}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                     </table>
                                 </div>
 
-                                <h3 style={{ marginTop: 20 }}>Wildcards</h3>
-                                <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 8 }}>
-                                    <p><code className="text-mono" style={{ color: '#A855F7' }}>*</code> — {helpData.wildcards?.['*']}</p>
-                                    <p style={{ marginTop: 8 }}><code className="text-mono" style={{ color: '#A855F7' }}>?</code> — {helpData.wildcards?.['?']}</p>
-                                </div>
-
-                                <h3 style={{ marginTop: 20 }}>Case Sensitivity</h3>
-                                <p className="text-sm text-muted">{helpData.case_sensitivity}</p>
-
-                                <h3 style={{ marginTop: 20 }}>Available Fields</h3>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                    {helpData.fields?.map(f => (
-                                        <span key={f} className="badge" style={{ background: 'rgba(124,58,237,0.2)', color: '#A855F7', padding: '4px 8px' }}>
-                                            {f}
+                                <h3 style={{ marginTop: 20 }}>Field Aliases</h3>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {helpData.field_aliases && Object.entries(helpData.field_aliases).map(([alias, field]) => (
+                                        <span key={alias} className="badge" style={{ background: 'rgba(124,58,237,0.2)', color: '#A855F7', padding: '4px 10px' }}>
+                                            {alias} &rarr; {field}
                                         </span>
                                     ))}
                                 </div>
 
-                                <h3 style={{ marginTop: 20 }}>Nested Query Example</h3>
-                                <pre style={{ padding: 16, background: 'rgba(0,0,0,0.3)', borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
-                                    {JSON.stringify(helpData.nesting?.example, null, 2)}
-                                </pre>
+                                <h3 style={{ marginTop: 20 }}>Available Fields</h3>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                    {helpData.fields?.map(f => (
+                                        <span key={f} className="badge" style={{ background: 'rgba(124,58,237,0.15)', color: '#A855F7', padding: '4px 8px' }}>
+                                            {f}
+                                        </span>
+                                    ))}
+                                </div>
                             </div>
                         ) : (
                             <div className="loading"><div className="loading-spinner" />Loading help...</div>

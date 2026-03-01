@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.cve import CVE
-from app.models.filter_rule import FilterRule
 from app.models.alert_log import AlertLog
+from app.engine.rule_loader import get_rules
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -26,9 +26,7 @@ async def dashboard_overview(db: AsyncSession = Depends(get_db)):
     today_alerts = (await db.execute(
         select(func.count()).select_from(AlertLog).where(AlertLog.sent_at >= today_start)
     )).scalar() or 0
-    active_filters = (await db.execute(
-        select(func.count()).select_from(FilterRule).where(FilterRule.enabled == True)
-    )).scalar() or 0
+    active_filters = sum(1 for r in get_rules() if r.get("enabled", True))
     kev_count = (await db.execute(
         select(func.count()).select_from(CVE).where(CVE.kev_flag == True)
     )).scalar() or 0

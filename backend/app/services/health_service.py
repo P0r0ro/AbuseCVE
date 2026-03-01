@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.cve import CVE
-from app.models.filter_rule import FilterRule
 from app.models.alert_log import AlertLog
 from app.models.health_report import HealthReport
+from app.engine.rule_loader import get_rules
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +99,8 @@ async def _test_filters_against_db(session: AsyncSession) -> list:
     from app.engine.filter_engine import match_cve_against_rule
     from app.engine.sources.base import NormalizedCVE
 
-    # Load enabled filters
-    filters_result = await session.execute(
-        select(FilterRule).where(FilterRule.enabled == True)
-    )
-    rules = filters_result.scalars().all()
+    # Load enabled rules from config file
+    rules = [r for r in get_rules() if r.get("enabled", True)]
     if not rules:
         return []
 
@@ -115,7 +112,7 @@ async def _test_filters_against_db(session: AsyncSession) -> list:
     db_cves = cve_result.scalars().all()
 
     if not db_cves:
-        return [{"id": r.id, "name": r.name, "matches": 0, "sample_size": 0, "status": "no_data"} for r in rules]
+        return [{"id": r["id"], "name": r["name"], "matches": 0, "sample_size": 0, "status": "no_data"} for r in rules]
 
     # Convert to NormalizedCVE once
     cves = []
@@ -133,24 +130,10 @@ async def _test_filters_against_db(session: AsyncSession) -> list:
 
     filter_stats = []
     for rule in rules:
-        rule_dict = {
-            "id": rule.id, "name": rule.name, "enabled": True,
-            "vendor": rule.vendor, "products": rule.products or [],
-            "min_cvss": rule.min_cvss, "max_cvss": rule.max_cvss,
-            "severity_filter": rule.severity_filter or [],
-            "keywords_include": rule.keywords_include or [],
-            "keywords_exclude": rule.keywords_exclude or [],
-            "cpe_vendor": rule.cpe_vendor,
-            "alert_on_modified": rule.alert_on_modified,
-            "conditions": rule.conditions,
-            "pql_query": getattr(rule, 'pql_query', None),
-            "severity_mapping": getattr(rule, 'severity_mapping', None),
-            "include_unknown": getattr(rule, 'include_unknown', False),
-        }
-        match_count = sum(1 for cve in cves if match_cve_against_rule(cve, rule_dict))
+        match_count = sum(1 for cve in cves if match_cve_against_rule(cve, rule))
         filter_stats.append({
-            "id": rule.id,
-            "name": rule.name,
+            "id": rule["id"],
+            "name": rule["name"],
             "matches": match_count,
             "sample_size": len(cves),
             "match_rate": round(match_count / len(cves) * 100, 2) if cves else 0,
@@ -189,10 +172,8 @@ async def generate_daily_report(session: AsyncSession) -> dict:
         select(func.count()).select_from(CVE).where(CVE.first_seen >= today_start)
     )).scalar() or 0
 
-    # Active filters
-    active_filters = (await session.execute(
-        select(func.count()).select_from(FilterRule).where(FilterRule.enabled == True)
-    )).scalar() or 0
+    # Active filters (from config file)
+    active_filters = sum(1 for r in get_rules() if r.get("enabled", True))
 
     # Per-filter test results
     try:

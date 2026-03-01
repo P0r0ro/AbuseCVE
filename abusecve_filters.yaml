@@ -1,266 +1,115 @@
-filter_rules:
+# ═══════════════════════════════════════════════════════════════════════════════
+# AbuseCVE Filter Rules (Wazuh-style)
+#
+# This file is the SINGLE SOURCE OF TRUTH for CVE filter rules.
+# Edit it directly on the server, then reload via POST /api/filters/reload.
+#
+# PQL Syntax Reference:
+#   field:value          contains match (case-insensitive)
+#   field:"multi word"   contains match with spaces
+#   field:=value         exact match
+#   field:~"pattern"     regex match (quote patterns containing parentheses)
+#   field:!value         not-contains
+#   field:>=N >N <N <=N  numeric comparisons
+#   field:blank          field is null or empty
+#   field:not_blank      field has a value
+#   field:A,B,C          comma-separated OR of exact values
+#   kev:true             boolean
+#   AND OR NOT ( )       boolean logic with grouping
+#
+# Field Aliases:
+#   cvss → cvss_score    sev → severity    desc → description
+#   kev  → kev_flag      id  → cve_id      pub → published_date
+#
+# Available Fields:
+#   cve_id, vendor, product, description, severity, cvss_score, cvss_vector,
+#   source, sources, published_date, modified_date, kev_flag, cpe_names,
+#   references, weaknesses, affected_products
+# ═══════════════════════════════════════════════════════════════════════════════
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # FORTINET — FortiEDR / FortiMail / FortiGuard / FortiAnalyzer
-  #
-  # Severity: CVSS ≥ 3.0 (embedded in conditions, no legacy severity_filter)
-  # Catches all version variants via regex OR across all relevant fields.
-  # ═══════════════════════════════════════════════════════════════════════════
-  - name: "Fortinet - FortiEDR / FortiMail / FortiGuard / FortiAnalyzer"
-    vendor: "fortinet"
-    products: []
+rules:
+
+  # ── 1001 ─ Fortinet: FortiEDR / FortiMail / FortiGuard / FortiAnalyzer ────
+  - id: 1001
+    name: "Fortinet - FortiEDR / FortiMail / FortiGuard / FortiAnalyzer"
     enabled: true
-    min_cvss: 3.0
-    max_cvss: 10.0
-    severity_filter: []
-    include_unknown: true
-    keywords_include: []
-    keywords_exclude: []
     alert_on_modified: true
-    description: >
+    description: >-
       Monitors Fortinet EDR, Mail, Guard, and Analyzer products across all
-      versions using regex OR conditions with CVSS >= 3.0 constraint embedded.
-    conditions:
-      logic: "AND"
-      conditions:
-        # CVSS must be >= 3.0 OR unrated (include_unknown handled in legacy mode,
-        # but we add it here for conditions mode)
-        - logic: "OR"
-          conditions:
-            - field: "cvss_score"
-              operator: "gte"
-              value: 3.0
-            - field: "cvss_score"
-              operator: "blank"
+      versions. Matches CVSS >= 3.0 or unrated CVEs.
+    pql: >-
+      (vendor:~"(?i)forti(net)?"
+       OR description:~"(?i)fortinet"
+       OR cpe_names:~"(?i):fortinet:"
+       OR affected_products:~"(?i)fortinet")
+      AND (cvss:>=3.0 OR cvss:blank)
+      AND (description:~"(?i)forti[-_]?edr"
+           OR product:~"(?i)forti[-_]?edr"
+           OR cpe_names:~"(?i):forti_?edr"
+           OR affected_products:~"(?i)forti[-_]?edr"
+           OR description:~"(?i)forti[-_]?mail"
+           OR product:~"(?i)forti[-_]?mail"
+           OR cpe_names:~"(?i):forti_?mail"
+           OR affected_products:~"(?i)forti[-_]?mail"
+           OR description:~"(?i)forti[-_]?guard"
+           OR product:~"(?i)forti[-_]?guard"
+           OR cpe_names:~"(?i):forti_?guard"
+           OR affected_products:~"(?i)forti[-_]?guard"
+           OR description:~"(?i)forti[-_]?analyzer"
+           OR product:~"(?i)forti[-_]?analyzer"
+           OR cpe_names:~"(?i):forti_?analyzer"
+           OR affected_products:~"(?i)forti[-_]?analyzer")
 
-        # Must be Fortinet-related (any field)
-        - logic: "OR"
-          conditions:
-            - field: "vendor"
-              operator: "regex"
-              value: "(?i)forti(net)?"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)fortinet"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):fortinet:"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)fortinet"
 
-        # Must mention at least one target product
-        - logic: "OR"
-          conditions:
-            - field: "description"
-              operator: "regex"
-              value: "(?i)forti[-_]?edr"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)forti[-_]?edr"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):forti_?edr"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)forti[-_]?edr"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)forti[-_]?mail"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)forti[-_]?mail"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):forti_?mail"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)forti[-_]?mail"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)forti[-_]?guard"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)forti[-_]?guard"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):forti_?guard"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)forti[-_]?guard"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)forti[-_]?analyzer"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)forti[-_]?analyzer"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):forti_?analyzer"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)forti[-_]?analyzer"
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # WAZUH — All modules except EDR plugins
-  # ═══════════════════════════════════════════════════════════════════════════
-  - name: "Wazuh - All (excl. EDR Plugins)"
-    vendor: "wazuh"
-    products: []
+  # ── 1002 ─ Wazuh: All modules (excl. EDR Plugins) ─────────────────────────
+  - id: 1002
+    name: "Wazuh - All (excl. EDR Plugins)"
     enabled: true
-    min_cvss: 3.0
-    max_cvss: 10.0
-    severity_filter: []
-    include_unknown: true
-    keywords_include: []
-    keywords_exclude:
-      - "edr plugin"
-      - "edr-plugin"
-      - "edr_plugin"
     alert_on_modified: true
-    description: >
-      Monitors all Wazuh CVEs (agent, manager, dashboard, API, indexer) across
-      all versions. CVSS >= 3.0. Excludes third-party EDR plugin CVEs.
-    conditions:
-      logic: "AND"
-      conditions:
-        # CVSS >= 3.0 OR unrated
-        - logic: "OR"
-          conditions:
-            - field: "cvss_score"
-              operator: "gte"
-              value: 3.0
-            - field: "cvss_score"
-              operator: "blank"
+    description: >-
+      Monitors all Wazuh CVEs (agent, manager, dashboard, API, indexer)
+      across all versions. CVSS >= 3.0. Excludes third-party EDR plugin CVEs.
+    pql: >-
+      (vendor:~"(?i)wazuh"
+       OR description:~"(?i)wazuh"
+       OR product:~"(?i)wazuh"
+       OR cpe_names:~"(?i):wazuh:"
+       OR affected_products:~"(?i)wazuh")
+      AND (cvss:>=3.0 OR cvss:blank)
+      AND description:!"edr plugin"
+      AND description:!edr-plugin
+      AND description:!edr_plugin
 
-        # Must mention Wazuh in any field
-        - logic: "OR"
-          conditions:
-            - field: "vendor"
-              operator: "regex"
-              value: "(?i)wazuh"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)wazuh"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)wazuh"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):wazuh:"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)wazuh"
 
-        # Exclude pure EDR plugin CVEs
-        - field: "description"
-          operator: "not_contains"
-          value: "edr plugin"
-        - field: "description"
-          operator: "not_contains"
-          value: "edr-plugin"
-        - field: "description"
-          operator: "not_contains"
-          value: "edr_plugin"
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # MICROSOFT — Azure / Sentinel / Exchange / Office 365
-  # ═══════════════════════════════════════════════════════════════════════════
-  - name: "Microsoft - Azure / Sentinel / Exchange / Office365"
-    vendor: "microsoft"
-    products: []
+  # ── 1003 ─ Microsoft: Azure / Sentinel / Exchange / Office 365 ─────────────
+  - id: 1003
+    name: "Microsoft - Azure / Sentinel / Exchange / Office365"
     enabled: true
-    min_cvss: 7.0
-    max_cvss: 10.0
-    severity_filter: []
-    include_unknown: false
-    keywords_include: []
-    keywords_exclude: []
     alert_on_modified: true
-    description: >
+    description: >-
       Monitors Microsoft Azure (all services, Entra ID, Arc, DevOps),
-      Microsoft Sentinel, Exchange Server (all versions) and Exchange Online,
-      Office 365 / Microsoft 365. CVSS >= 7.0 (HIGH/CRITICAL only).
-    conditions:
-      logic: "AND"
-      conditions:
-        # CVSS >= 7.0 (HIGH / CRITICAL only, no unrated)
-        - field: "cvss_score"
-          operator: "gte"
-          value: 7.0
-
-        # Must be Microsoft-related
-        - logic: "OR"
-          conditions:
-            - field: "vendor"
-              operator: "regex"
-              value: "(?i)microsoft"
-            - field: "description"
-              operator: "regex"
-              value: "(?i)microsoft"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):microsoft:"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)microsoft"
-
-        # Must mention one of the target product families
-        - logic: "OR"
-          conditions:
-            # Azure (all services)
-            - field: "description"
-              operator: "regex"
-              value: "(?i)\\bazure\\b"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)\\bazure\\b"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):azure"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)\\bazure\\b"
-            # Entra ID / Azure AD
-            - field: "description"
-              operator: "regex"
-              value: "(?i)(entra\\s+(id|external|workload)|azure\\s+(active\\s+directory|ad\\b))"
-            # Sentinel
-            - field: "description"
-              operator: "regex"
-              value: "(?i)(microsoft|azure)\\s+sentinel"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)sentinel"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):sentinel"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)sentinel"
-            # Exchange Server / Online
-            - field: "description"
-              operator: "regex"
-              value: "(?i)(microsoft\\s+)?exchange(\\s+(server|online))?"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)exchange"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):exchange"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)exchange"
-            # Office 365 / Microsoft 365 / M365
-            - field: "description"
-              operator: "regex"
-              value: "(?i)(office|microsoft)[\\s_-]?365|\\bm365\\b"
-            - field: "product"
-              operator: "regex"
-              value: "(?i)(office|microsoft)[\\s_-]?365"
-            - field: "cpe_names"
-              operator: "regex"
-              value: "(?i):(office|microsoft)_?365"
-            - field: "affected_products"
-              operator: "regex"
-              value: "(?i)(office|microsoft)[\\s_-]?365"
+      Sentinel, Exchange Server/Online, Office 365 / Microsoft 365.
+      CVSS >= 7.0 (HIGH/CRITICAL only, no unrated).
+    pql: >-
+      cvss:>=7.0
+      AND (vendor:~"(?i)microsoft"
+           OR description:~"(?i)microsoft"
+           OR cpe_names:~"(?i):microsoft:"
+           OR affected_products:~"(?i)microsoft")
+      AND (description:~"(?i)\bazure\b"
+           OR product:~"(?i)\bazure\b"
+           OR cpe_names:~"(?i):azure"
+           OR affected_products:~"(?i)\bazure\b"
+           OR description:~"(?i)(entra\s+(id|external|workload)|azure\s+(active\s+directory|ad\b))"
+           OR description:~"(?i)(microsoft|azure)\s+sentinel"
+           OR product:~"(?i)sentinel"
+           OR cpe_names:~"(?i):sentinel"
+           OR affected_products:~"(?i)sentinel"
+           OR description:~"(?i)(microsoft\s+)?exchange(\s+(server|online))?"
+           OR product:~"(?i)exchange"
+           OR cpe_names:~"(?i):exchange"
+           OR affected_products:~"(?i)exchange"
+           OR description:~"(?i)(office|microsoft)[\s_-]?365|\bm365\b"
+           OR product:~"(?i)(office|microsoft)[\s_-]?365"
+           OR cpe_names:~"(?i):(office|microsoft)_?365"
+           OR affected_products:~"(?i)(office|microsoft)[\s_-]?365")
