@@ -15,6 +15,8 @@ export default function Filters() {
     const [showHelp, setShowHelp] = useState(false);
     const [helpData, setHelpData] = useState(null);
     const [importStatus, setImportStatus] = useState('');
+    const [quickTestId, setQuickTestId] = useState(null);
+    const [quickTestResult, setQuickTestResult] = useState({});
     const fileInputRef = useRef(null);
 
     // Form state
@@ -185,25 +187,36 @@ export default function Filters() {
     const handleTestFilter = async () => {
         setTestResult({ loading: true });
         try {
-            const result = await testFilterRule({
-                name: form.name || 'Test Rule',
-                vendor: form.vendor,
-                products: form.products,
-                min_cvss: form.min_cvss ? parseFloat(form.min_cvss) : null,
-                max_cvss: form.max_cvss ? parseFloat(form.max_cvss) : null,
-                severity_filter: form.severity_filter,
-                keywords_include: [...form.keywords_include, ...form.products],
-                keywords_exclude: form.keywords_exclude,
-                cpe_vendor: form.cpe_vendor,
-                alert_on_modified: form.alert_on_modified,
-                conditions: form.conditions,
-                send_test_alert: true,
-            });
+            let payload;
+            if (editId) {
+                // Use filter_id so backend loads the full saved rule (including conditions)
+                payload = { filter_id: editId };
+            } else {
+                payload = {
+                    name: form.name || 'Test Rule',
+                    vendor: form.vendor || null,
+                    products: form.products,
+                    min_cvss: form.min_cvss ? parseFloat(form.min_cvss) : null,
+                    max_cvss: form.max_cvss ? parseFloat(form.max_cvss) : null,
+                    severity_filter: form.severity_filter,
+                    keywords_include: form.keywords_include,
+                    keywords_exclude: form.keywords_exclude,
+                    cpe_vendor: form.cpe_vendor || null,
+                    alert_on_modified: form.alert_on_modified,
+                    conditions: form.conditions || null,
+                    pql_query: form.pql_query || null,
+                    severity_mapping: form.severity_mapping || null,
+                    include_unknown: form.include_unknown,
+                    send_test_alert: false,
+                };
+            }
+            const result = await testFilterRule(payload);
             setTestResult(result);
         } catch (e) {
             setTestResult({ status: 'error', message: e.message });
         }
     };
+
 
     const handleExportYAML = async () => {
         try {
@@ -225,6 +238,18 @@ export default function Filters() {
             setImportStatus(`❌ Import failed: ${err.message}`);
         }
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleQuickTest = async (filterId) => {
+        setQuickTestId(filterId);
+        try {
+            const result = await testFilterRule({ filter_id: filterId });
+            setQuickTestResult(prev => ({ ...prev, [filterId]: result }));
+        } catch (e) {
+            setQuickTestResult(prev => ({ ...prev, [filterId]: { status: 'error', message: e.message } }));
+        } finally {
+            setQuickTestId(null);
+        }
     };
 
     const handleShowHelp = async () => {
@@ -584,10 +609,32 @@ export default function Filters() {
                                         <div style={{ display: 'flex', gap: 6 }}>
                                             <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }}
                                                 onClick={() => handleEdit(f)}>✏️ Edit</button>
+                                            <button
+                                                className="btn btn-secondary"
+                                                style={{ padding: '4px 10px', fontSize: 12, color: 'var(--purple-400)' }}
+                                                disabled={quickTestId === f.id}
+                                                onClick={() => handleQuickTest(f.id)}>
+                                                {quickTestId === f.id ? '⏳' : '🧪 Test'}
+                                            </button>
                                             <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
                                                 onClick={() => handleDelete(f.id)}>🗑️</button>
                                         </div>
+                                        {/* Inline quick test result */}
+                                        {quickTestResult[f.id] && (
+                                            <div style={{ marginTop: 4, fontSize: 11, maxWidth: 240 }}>
+                                                {quickTestResult[f.id].status === 'error'
+                                                    ? <span style={{ color: 'var(--error)' }}>❌ {quickTestResult[f.id].message}</span>
+                                                    : <span style={{ color: quickTestResult[f.id].matches > 0 ? 'var(--success)' : 'var(--warning)' }}>
+                                                        {quickTestResult[f.id].matches > 0
+                                                            ? `✅ ${quickTestResult[f.id].matches.toLocaleString()} matches of ${quickTestResult[f.id].total_tested.toLocaleString()} CVEs (${quickTestResult[f.id].elapsed_seconds}s)`
+                                                            : `⚠ 0 matches of ${quickTestResult[f.id].total_tested?.toLocaleString()} CVEs`
+                                                        }
+                                                    </span>
+                                                }
+                                            </div>
+                                        )}
                                     </td>
+
                                 </tr>
                             ))}
                             {filters.length === 0 && (
