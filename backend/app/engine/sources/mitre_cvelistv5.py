@@ -284,20 +284,32 @@ class MITRECVEListSource(BaseCVESource):
     async def fetch_all(self, start_index: int = 0, page_size: int = 2000) -> List[NormalizedCVE]:
         """Fetch all CVEs by downloading the full repository ZIP.
 
-        This downloads the main branch ZIP (~800MB) and parses all CVE JSON files.
-        For a faster approach, use the bulk_import_from_directory() method with
-        a manually downloaded/extracted copy.
+        Uses streaming download to a temp file to avoid loading ~800MB into
+        memory (important for containers with limited RAM).
         """
+        import tempfile
+
         results: List[NormalizedCVE] = []
-        logger.info("MITRE: Starting full ZIP download (this may take a while)...")
+        logger.info("MITRE: Starting full ZIP download (streaming to disk)...")
 
         async with httpx.AsyncClient(timeout=3600.0) as client:
             try:
-                resp = await client.get(FULL_ZIP_URL, follow_redirects=True)
-                resp.raise_for_status()
-                logger.info(f"MITRE: ZIP downloaded ({len(resp.content) / 1024 / 1024:.1f} MB)")
+                # Stream to temp file instead of loading into memory
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    downloaded = 0
+                    async with client.stream("GET", FULL_ZIP_URL, follow_redirects=True) as resp:
+                        resp.raise_for_status()
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            tmp.write(chunk)
+                            downloaded += len(chunk)
+                            if downloaded % (50 * 1024 * 1024) == 0:  # Log every ~50MB
+                                logger.info(f"MITRE: Downloaded {downloaded / 1024 / 1024:.0f} MB...")
 
-                with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                logger.info(f"MITRE: ZIP downloaded to disk ({downloaded / 1024 / 1024:.1f} MB)")
+
+                # Parse from disk — only one CVE JSON in memory at a time
+                with zipfile.ZipFile(tmp_path) as zf:
                     json_files = [n for n in zf.namelist() if n.endswith(".json") and "CVE-" in n]
                     total = len(json_files)
                     logger.info(f"MITRE: Parsing {total} CVE files...")
@@ -318,6 +330,12 @@ class MITRECVEListSource(BaseCVESource):
 
             except Exception as e:
                 logger.error(f"MITRE full download failed: {e}")
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
         logger.info(f"MITRE fetch_all: {len(results)} CVEs parsed")
         return results

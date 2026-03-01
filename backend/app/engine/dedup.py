@@ -210,3 +210,103 @@ async def dedup_and_store(
         f"{len(updated_cves)} modified"
     )
     return new_cves, existing_count
+
+
+async def dedup_and_store_bulk(
+    session: AsyncSession,
+    cves: List[NormalizedCVE],
+) -> Tuple[List[NormalizedCVE], int]:
+    """Fast bulk dedup for DB init — batch SELECT + bulk INSERT.
+
+    Instead of one SELECT per CVE (~280K roundtrips), this does:
+    1. One SELECT to get all existing CVE IDs in the batch
+    2. One bulk INSERT for all new CVEs
+    3. One bulk UPDATE for existing CVEs (seen_count, sources, kev_flag)
+
+    ~1000x faster than dedup_and_store() for large batches.
+    Use this ONLY during init; incremental syncs should use dedup_and_store()
+    which does full multi-source field merging.
+    """
+    if not cves:
+        return [], 0
+
+    # 1. Batch lookup: get all existing CVE IDs in one query
+    cve_ids = [c.cve_id for c in cves]
+    result = await session.execute(
+        select(CVE.cve_id, CVE.id).where(CVE.cve_id.in_(cve_ids))
+    )
+    existing_ids = {row[0] for row in result.all()}
+
+    # 2. Split into new vs existing
+    new_cves: List[NormalizedCVE] = []
+    existing_cves: List[NormalizedCVE] = []
+
+    for cve_data in cves:
+        if cve_data.cve_id in existing_ids:
+            existing_cves.append(cve_data)
+        else:
+            new_cves.append(cve_data)
+
+    # 3. Bulk insert new CVEs
+    if new_cves:
+        now = datetime.utcnow()
+        new_records = []
+        for cve_data in new_cves:
+            new_records.append({
+                "cve_id": cve_data.cve_id,
+                "vendor": cve_data.vendor,
+                "product": cve_data.product,
+                "description": cve_data.description,
+                "severity": cve_data.severity,
+                "cvss_score": cve_data.cvss_score,
+                "cvss_vector": cve_data.cvss_vector,
+                "source": cve_data.source,
+                "sources": cve_data.sources,
+                "published_date": cve_data.published_date,
+                "modified_date": cve_data.modified_date,
+                "kev_flag": cve_data.kev_flag,
+                "seen_count": 1,
+                "first_seen": now,
+                "last_seen": now,
+                "alert_sent": False,
+                "cpe_names": cve_data.cpe_names,
+                "references": cve_data.references,
+                "raw_json": cve_data.raw_json,
+                "cvss_scores": cve_data.cvss_scores,
+                "weaknesses": cve_data.weaknesses,
+                "affected_products": cve_data.affected_products,
+            })
+
+        # Insert in sub-batches to avoid overly large statements
+        insert_batch_size = 500
+        for i in range(0, len(new_records), insert_batch_size):
+            chunk = new_records[i:i + insert_batch_size]
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            stmt = pg_insert(CVE).values(chunk).on_conflict_do_nothing(
+                index_elements=["cve_id"]
+            )
+            await session.execute(stmt)
+
+    # 4. Lightweight update for existing CVEs (just bump seen_count + merge kev_flag)
+    if existing_cves:
+        kev_ids = [c.cve_id for c in existing_cves if c.kev_flag]
+        if kev_ids:
+            await session.execute(
+                update(CVE)
+                .where(CVE.cve_id.in_(kev_ids))
+                .values(kev_flag=True, last_seen=datetime.utcnow())
+            )
+
+        non_kev_ids = [c.cve_id for c in existing_cves if not c.kev_flag]
+        if non_kev_ids:
+            await session.execute(
+                update(CVE)
+                .where(CVE.cve_id.in_(non_kev_ids))
+                .values(last_seen=datetime.utcnow())
+            )
+
+    await session.flush()
+    logger.info(
+        f"Dedup (bulk): {len(new_cves)} new, {len(existing_cves)} existing"
+    )
+    return new_cves, len(existing_cves)

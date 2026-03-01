@@ -25,7 +25,7 @@ from app.engine.sources.mitre_cvelistv5 import MITRECVEListSource
 from app.engine.sources.redhat import RedHatSource
 from app.engine.sources.base import NormalizedCVE
 from app.engine.filter_engine import filter_cves, FilterMatch
-from app.engine.dedup import dedup_and_store
+from app.engine.dedup import dedup_and_store, dedup_and_store_bulk
 from app.models.filter_rule import FilterRule
 from app.models.cve import CVE
 
@@ -273,7 +273,7 @@ class CVEPipeline:
         # 1. CISA KEV first (small — ~1500 entries, always fits in memory)
         try:
             kev_cves = await self.kev.fetch_all()
-            new, existing = await dedup_and_store(session, kev_cves)
+            new, existing = await dedup_and_store_bulk(session, kev_cves)
             await session.commit()
             total_new += len(new)
             total_existing += existing
@@ -287,7 +287,7 @@ class CVEPipeline:
         try:
             async for batch, fetched, total in self.nvd.fetch_all_batched():
                 if batch:
-                    new, existing = await dedup_and_store(session, batch)
+                    new, existing = await dedup_and_store_bulk(session, batch)
                     await session.commit()
                     total_new += len(new)
                     total_existing += existing
@@ -309,7 +309,7 @@ class CVEPipeline:
             mitre_new = 0
             for i in range(0, len(mitre_cves), batch_size):
                 chunk = mitre_cves[i:i + batch_size]
-                new, existing = await dedup_and_store(session, chunk)
+                new, existing = await dedup_and_store_bulk(session, chunk)
                 await session.commit()
                 mitre_new += len(new)
                 total_new += len(new)
@@ -328,7 +328,7 @@ class CVEPipeline:
             redhat_new = 0
             for i in range(0, len(redhat_cves), batch_size):
                 chunk = redhat_cves[i:i + batch_size]
-                new, existing = await dedup_and_store(session, chunk)
+                new, existing = await dedup_and_store_bulk(session, chunk)
                 await session.commit()
                 redhat_new += len(new)
                 total_new += len(new)
@@ -401,7 +401,7 @@ class CVEPipeline:
         total_existing = 0
         for i in range(0, len(all_cves), batch_size):
             batch = all_cves[i:i + batch_size]
-            new_cves, existing = await dedup_and_store(session, batch)
+            new_cves, existing = await dedup_and_store_bulk(session, batch)
             total_new += len(new_cves)
             total_existing += existing
             await session.commit()

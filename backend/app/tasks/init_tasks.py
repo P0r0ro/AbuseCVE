@@ -21,7 +21,7 @@ def _run_async(coro):
 @celery_app.task(
     bind=True,
     name="app.tasks.init_tasks.initialize_database",
-    max_retries=1,
+    max_retries=0,
     soft_time_limit=14400,   # 4 hour soft limit
     time_limit=28800,        # 8 hour hard limit
 )
@@ -55,7 +55,7 @@ def initialize_database(self):
         return result
     except Exception as exc:
         logger.error(f"❌ DB initialization failed: {exc}")
-        raise self.retry(exc=exc)
+        raise
 
 
 @celery_app.task(
