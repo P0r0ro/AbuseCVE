@@ -323,8 +323,6 @@ export default function Logs() {
     );
 }
 
-
-const LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
 const LEVEL_COLORS = {
     DEBUG: 'var(--text-muted)',
     INFO: 'var(--info)',
