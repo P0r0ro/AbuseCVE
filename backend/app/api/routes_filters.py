@@ -205,15 +205,24 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
     elapsed = round(time.monotonic() - t_start, 2)
     returned = matched_cves[:data.limit] if data.limit else matched_cves
 
-    # Optional test alert
-    if data.send_test_alert and matched_cves:
+    # Optional test alert — sends email regardless of match count
+    test_alert_result = None
+    if data.send_test_alert:
         try:
-            from app.services.smtp_service import send_cve_alert
-            cve_dict = matched_cves[0].copy()
-            await send_cve_alert(cve_dict, rule_name=f"[TEST] {rule_dict['name']}")
-            logger.info(f"Test alert sent for {cve_dict['cve_id']}")
+            from app.services.smtp_service import send_filter_test_email
+            test_alert_result = await send_filter_test_email(
+                rule_name=rule_dict["name"],
+                rule_id=rule_dict.get("id"),
+                pql=rule_dict.get("pql", data.pql or ""),
+                total_tested=total_cves,
+                match_count=len(matched_cves),
+                elapsed=elapsed,
+                sample_cves=matched_cves[:10],
+            )
+            logger.info(f"Filter test email sent: {test_alert_result}")
         except Exception as exc:
             logger.error(f"Test alert failed: {exc}", exc_info=True)
+            test_alert_result = {"status": "failed", "error": str(exc)}
 
     return {
         "status": "ok",
@@ -224,6 +233,7 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
         "returned": len(returned),
         "elapsed_seconds": elapsed,
         "matched_cves": returned,
+        **({"test_alert": test_alert_result} if test_alert_result else {}),
     }
 
 

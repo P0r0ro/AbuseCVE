@@ -183,6 +183,149 @@ async def send_health_report(report_data: dict) -> dict:
     return await send_email(subject=subject, html_body=html)
 
 
+async def send_filter_test_email(
+    rule_name: str,
+    rule_id: int,
+    pql: str,
+    total_tested: int,
+    match_count: int,
+    elapsed: float,
+    sample_cves: list = None,
+) -> dict:
+    """Send filter test results via email — confirms SMTP + filter pipeline work."""
+    # Build sample CVEs table
+    sample_rows = ""
+    if sample_cves:
+        for cve in sample_cves:
+            cve_id = cve.get("cve_id", "?")
+            vendor = cve.get("vendor", "?")
+            severity = cve.get("severity", "?")
+            cvss = cve.get("cvss_score", "?")
+            sample_rows += (
+                f'<tr><td style="padding:6px 10px;border-bottom:1px solid #333;">{cve_id}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{vendor}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{severity}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{cvss}</td></tr>'
+            )
+
+    sample_table = ""
+    if sample_rows:
+        sample_table = f"""
+        <h3 style="color:#A855F7;margin-top:20px;">Sample Matched CVEs</h3>
+        <table style="width:100%;border-collapse:collapse;color:#E0E0E0;">
+            <tr><th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">CVE ID</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">Vendor</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">Severity</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">CVSS</th></tr>
+            {sample_rows}
+        </table>
+        """
+    else:
+        sample_table = '<p style="color:#FF8C00;margin-top:15px;">No CVEs matched this filter rule.</p>'
+
+    match_rate = round(match_count / total_tested * 100, 2) if total_tested else 0
+
+    html = f"""
+    <div style="font-family:'Inter',sans-serif;background:#0F0F1A;color:#E0E0E0;padding:40px;">
+        <div style="max-width:600px;margin:0 auto;background:#1A1A2E;border-radius:12px;
+                    border:1px solid rgba(124,58,237,0.3);padding:30px;">
+            <h1 style="color:#A855F7;margin:0 0 10px 0;">🧪 AbuseCVE Filter Test</h1>
+            <p style="color:#888;margin:0 0 20px 0;">SMTP + Filter Pipeline Verification</p>
+            <div style="margin:15px 0;padding:15px;background:rgba(124,58,237,0.1);border-radius:8px;">
+                <p><strong>Rule:</strong> {rule_name} (ID: {rule_id})</p>
+                <p><strong>PQL:</strong> <code style="color:#A855F7;">{pql[:200]}</code></p>
+            </div>
+            <div style="margin:15px 0;padding:15px;background:rgba(74,222,128,0.1);border-radius:8px;">
+                <p>📋 Total CVEs Tested: <strong>{total_tested:,}</strong></p>
+                <p>✅ Matches Found: <strong>{match_count:,}</strong> ({match_rate}%)</p>
+                <p>⏱️ Elapsed: <strong>{elapsed}s</strong></p>
+            </div>
+            {sample_table}
+            <p style="color:#4ADE80;font-weight:bold;margin-top:20px;">
+                ✅ If you received this email, SMTP and the filter pipeline are working correctly.
+            </p>
+            <p style="color:#888;font-size:12px;margin-top:15px;">
+                Sent at: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}
+            </p>
+        </div>
+    </div>
+    """
+
+    subject = f"🧪 AbuseCVE Filter Test — {rule_name}: {match_count} matches"
+    return await send_email(subject=subject, html_body=html)
+
+
+async def send_scan_summary(scan_result: dict, matched_cves: list = None) -> dict:
+    """Send a scan cycle summary email — always sent after every scan."""
+    total_fetched = scan_result.get("total_fetched", 0)
+    filtered = scan_result.get("filtered", 0)
+    new_alerted = scan_result.get("new_alerted", 0)
+    alerts_failed = scan_result.get("alerts_failed", 0)
+    existing = scan_result.get("existing", 0)
+    total_new = scan_result.get("total_new_stored", 0)
+
+    # Build matched CVEs table
+    matched_rows = ""
+    if matched_cves:
+        for cve in matched_cves[:20]:
+            cve_id = getattr(cve, "cve_id", None) or (cve.get("cve_id") if isinstance(cve, dict) else "?")
+            vendor = getattr(cve, "vendor", None) or (cve.get("vendor") if isinstance(cve, dict) else "?")
+            severity = getattr(cve, "severity", None) or (cve.get("severity") if isinstance(cve, dict) else "?")
+            cvss = getattr(cve, "cvss_score", None) or (cve.get("cvss_score") if isinstance(cve, dict) else "?")
+            matched_rows += (
+                f'<tr><td style="padding:6px 10px;border-bottom:1px solid #333;">{cve_id}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{vendor}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{severity}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #333;">{cvss}</td></tr>'
+            )
+
+    matched_table = ""
+    if matched_rows:
+        matched_table = f"""
+        <h3 style="color:#A855F7;margin-top:20px;">Matched CVEs (up to 20)</h3>
+        <table style="width:100%;border-collapse:collapse;color:#E0E0E0;">
+            <tr><th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">CVE ID</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">Vendor</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">Severity</th>
+                <th style="text-align:left;padding:6px 10px;color:#7C3AED;border-bottom:1px solid #555;">CVSS</th></tr>
+            {matched_rows}
+        </table>
+        """
+
+    status_color = "#4ADE80" if alerts_failed == 0 else "#FF8C00"
+    status_text = "All alerts sent" if new_alerted > 0 and alerts_failed == 0 else (
+        "No new CVEs matched" if new_alerted == 0 and total_fetched > 0 else
+        f"{alerts_failed} alert(s) failed" if alerts_failed > 0 else
+        "No CVEs fetched"
+    )
+
+    html = f"""
+    <div style="font-family:'Inter',sans-serif;background:#0F0F1A;color:#E0E0E0;padding:40px;">
+        <div style="max-width:600px;margin:0 auto;background:#1A1A2E;border-radius:12px;
+                    border:1px solid rgba(124,58,237,0.3);padding:30px;">
+            <h1 style="color:#A855F7;margin:0 0 10px 0;">🔍 AbuseCVE Scan Summary</h1>
+            <div style="display:inline-block;background:{status_color};color:#fff;padding:4px 12px;
+                        border-radius:6px;font-weight:bold;font-size:14px;">{status_text}</div>
+            <div style="margin-top:20px;padding:15px;background:rgba(124,58,237,0.1);border-radius:8px;">
+                <p>📡 Total Fetched: <strong>{total_fetched}</strong></p>
+                <p>🔍 Matched Filters: <strong>{filtered}</strong></p>
+                <p>🆕 New CVEs Stored: <strong>{total_new}</strong></p>
+                <p>📬 Alerts Sent: <strong>{new_alerted}</strong></p>
+                <p>❌ Alerts Failed: <strong>{alerts_failed}</strong></p>
+                <p>🔄 Existing CVEs Updated: <strong>{existing}</strong></p>
+            </div>
+            {matched_table}
+            <p style="color:#888;font-size:12px;margin-top:20px;">
+                Scan completed at: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}
+            </p>
+        </div>
+    </div>
+    """
+
+    subject = f"🔍 AbuseCVE Scan — {new_alerted} alerts, {total_fetched} fetched"
+    return await send_email(subject=subject, html_body=html)
+
+
 async def send_test_email() -> dict:
     """Send a test email to verify SMTP configuration."""
     html = """

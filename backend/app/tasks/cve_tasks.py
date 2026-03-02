@@ -138,7 +138,7 @@ def run_cve_scan(self):
 
                 await session.commit()
 
-                return {
+                scan_summary = {
                     "total_fetched": result.get("total_fetched", 0),
                     "filtered": result.get("filtered_count", 0),
                     "new_alerted": alerts_sent,
@@ -146,6 +146,15 @@ def run_cve_scan(self):
                     "existing": result.get("existing_count", 0),
                     "total_new_stored": result.get("total_new_stored", 0),
                 }
+
+                # Always send a scan summary email so operators know the scan ran
+                try:
+                    from app.services.smtp_service import send_scan_summary
+                    await send_scan_summary(scan_summary, matched_cves=new_cves)
+                except Exception as e:
+                    logger.warning(f"Scan summary email failed: {e}")
+
+                return scan_summary
 
             except Exception as e:
                 logger.error(
