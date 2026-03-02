@@ -52,8 +52,7 @@ celery_app.conf.update(
     beat_schedule={
         "cve-scan-cycle": {
             "task": "app.tasks.cve_tasks.run_cve_scan",
-            "schedule": settings.scan_interval_minutes * 60,  # Convert to seconds
-            "options": {"queue": "default"},
+            "schedule": settings.scan_interval_minutes * 60,  # seconds
         },
         "daily-health-report": {
             "task": "app.tasks.health_tasks.generate_and_send_health_report",
@@ -61,7 +60,6 @@ celery_app.conf.update(
                 hour=settings.health_report_hour,
                 minute=settings.health_report_minute,
             ),
-            "options": {"queue": "default"},
         },
     },
 )
