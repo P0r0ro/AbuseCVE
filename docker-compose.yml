@@ -14,7 +14,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -31,7 +31,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -61,7 +61,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -102,7 +102,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A app.tasks.celery_app beat --loglevel=info
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule=/app/celerybeat-schedule/celerybeat-schedule
     env_file: .env
     environment:
       - DATABASE_URL=${DATABASE_URL}
@@ -110,6 +110,7 @@ services:
       - RULES_FILE_PATH=/app/abusecve_filters.yaml
     volumes:
       - ./abusecve_filters.yaml:/app/abusecve_filters.yaml
+      - celery_beat_data:/app/celerybeat-schedule
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,6 +118,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+      worker:
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -149,7 +152,7 @@ services:
       - backend
       - frontend
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/api/health"]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost/api/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -160,3 +163,4 @@ services:
 
 volumes:
   postgres_data:
+  celery_beat_data:

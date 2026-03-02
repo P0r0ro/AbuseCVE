@@ -147,12 +147,17 @@ def run_cve_scan(self):
                     "total_new_stored": result.get("total_new_stored", 0),
                 }
 
-                # Always send a scan summary email so operators know the scan ran
-                try:
-                    from app.services.smtp_service import send_scan_summary
-                    await send_scan_summary(scan_summary, matched_cves=new_cves)
-                except Exception as e:
-                    logger.warning(f"Scan summary email failed: {e}")
+                # Only send a scan summary email when the scan actually fetched something
+                # or when alerts were sent/failed — avoids flooding with empty scan emails
+                total_fetched = scan_summary["total_fetched"]
+                if total_fetched > 0 or alerts_sent > 0 or alerts_failed > 0:
+                    try:
+                        from app.services.smtp_service import send_scan_summary
+                        await send_scan_summary(scan_summary, matched_cves=new_cves)
+                    except Exception as e:
+                        logger.warning(f"Scan summary email failed: {e}")
+                else:
+                    logger.info("CVE scan: no new CVEs fetched, skipping summary email")
 
                 return scan_summary
 
