@@ -61,6 +61,8 @@ export const getCVEs = (params = {}) => {
 export const getCVE = (cveId) => request(`/cves/${cveId}`);
 export const searchCVEs = (query, page = 1, perPage = 50) =>
     request('/cves/search', { method: 'POST', body: { query, page, per_page: perPage } });
+export const searchCVEsByPQL = (pql, page = 1, perPage = 50) =>
+    request('/cves/search/pql', { method: 'POST', body: { pql, page, per_page: perPage } });
 
 // ── Alerts ───────────────────────────────────
 export const getAlerts = (params = {}) => {

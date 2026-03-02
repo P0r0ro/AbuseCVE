@@ -107,6 +107,9 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - RULES_FILE_PATH=/app/abusecve_filters.yaml
+    volumes:
+      - ./abusecve_filters.yaml:/app/abusecve_filters.yaml
     depends_on:
       postgres:
         condition: service_healthy

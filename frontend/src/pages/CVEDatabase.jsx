@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCVEs, generateKA, searchCVEs, getQueryHelp } from '../api';
+import { getCVEs, generateKA, searchCVEsByPQL, getQueryHelp } from '../api';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -86,7 +86,7 @@ export default function CVEDatabase() {
                                 if (e.key === 'Enter' && pqlQuery.trim()) {
                                     setLoading(true);
                                     try {
-                                        const data = await searchCVEs(pqlQuery, params.page, params.per_page);
+                                        const data = await searchCVEsByPQL(pqlQuery, params.page, params.per_page);
                                         setCves(data.cves || data.items || data.results || []);
                                         setTotal(data.total || 0);
                                         setPages(data.pages || 1);
@@ -104,7 +104,7 @@ export default function CVEDatabase() {
                             if (!pqlQuery.trim()) return;
                             setLoading(true);
                             try {
-                                const data = await searchCVEs(pqlQuery, params.page, params.per_page);
+                                const data = await searchCVEsByPQL(pqlQuery, params.page, params.per_page);
                                 setCves(data.cves || data.items || data.results || []);
                                 setTotal(data.total || 0);
                                 setPages(data.pages || 1);

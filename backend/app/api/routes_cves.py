@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.cve import CVE
-from app.engine.query_engine import condition_to_sql_filter
+from app.engine.query_engine import condition_to_sql_filter, parse_pql_to_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -159,4 +159,75 @@ async def advanced_search(
         "page": data.page,
         "per_page": data.per_page,
         "pages": (total + data.per_page - 1) // data.per_page if data.per_page else 0,
+    }
+
+
+class PQLSearchRequest(BaseModel):
+    """Search CVEs using PQL (Policy Query Language)."""
+    pql: str
+    page: int = 1
+    per_page: int = 50
+    sort_by: str = "published_date"
+    sort_order: str = "desc"
+
+
+@router.post("/search/pql")
+async def pql_search(
+    data: PQLSearchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Search CVEs using PQL (Policy Query Language).
+
+    Examples:
+      vendor:fortinet AND severity:CRITICAL,HIGH
+      (vendor:~"(?i)forti" OR description:~"(?i)fortinet") AND cvss:>=7.0
+      kev:true AND NOT severity:LOW
+    """
+    if not data.pql.strip():
+        return {"error": "PQL query cannot be empty", "cves": [], "total": 0}
+
+    # Parse PQL to conditions dict
+    try:
+        conditions = parse_pql_to_conditions(data.pql)
+        if not conditions:
+            return {"error": "PQL query parsed to empty conditions", "cves": [], "total": 0}
+    except Exception as e:
+        logger.error(f"PQL parse failed: {e}")
+        return {"error": f"Invalid PQL syntax: {str(e)}", "cves": [], "total": 0}
+
+    # Translate to SQL
+    base_query = select(CVE)
+    try:
+        sql_filter = condition_to_sql_filter(CVE, conditions)
+        if sql_filter is not None:
+            base_query = base_query.where(sql_filter)
+    except Exception as e:
+        logger.error(f"PQL to SQL translation failed: {e}")
+        return {"error": f"Query translation error: {str(e)}", "cves": [], "total": 0}
+
+    # Count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # Sort
+    sort_column = getattr(CVE, data.sort_by, CVE.published_date)
+    if data.sort_order == "asc":
+        base_query = base_query.order_by(asc(sort_column))
+    else:
+        base_query = base_query.order_by(desc(sort_column))
+
+    # Paginate
+    base_query = base_query.offset((data.page - 1) * data.per_page).limit(data.per_page)
+
+    result = await db.execute(base_query)
+    cves = [c.to_dict() for c in result.scalars().all()]
+
+    return {
+        "cves": cves,
+        "total": total,
+        "page": data.page,
+        "per_page": data.per_page,
+        "pages": (total + data.per_page - 1) // data.per_page if data.per_page else 0,
+        "pql": data.pql,
+        "parsed_conditions": conditions,
     }

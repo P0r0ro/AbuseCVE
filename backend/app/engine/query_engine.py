@@ -337,6 +337,20 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
         logger.warning(f"Unknown field '{field_name}' for SQL filter")
         return None
 
+    # JSON columns need casting to text for string operations
+    def _text_col(col):
+        """Cast JSON columns to text for string operations."""
+        try:
+            from sqlalchemy import JSON as SA_JSON
+            col_obj = col.property.columns[0]
+            if isinstance(col_obj.type, SA_JSON):
+                return cast(col, String)
+        except Exception:
+            pass
+        return col
+
+    text_column = _text_col(column)
+
     # Translate operator to SQLAlchemy
     if operator == "blank":
         return or_(column == None, column == "")
@@ -346,9 +360,8 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
 
     if operator == "equal":
         if value and _has_wildcards(str(value)):
-            # Convert wildcards to SQL LIKE pattern
             like_pattern = str(value).replace("*", "%").replace("?", "_")
-            return column.ilike(like_pattern) if not case_sensitive else column.like(like_pattern)
+            return text_column.ilike(like_pattern) if not case_sensitive else text_column.like(like_pattern)
         if case_sensitive:
             return column == value
         return func.lower(cast(column, String)) == func.lower(str(value))
@@ -356,7 +369,7 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
     if operator == "not_equal":
         if value and _has_wildcards(str(value)):
             like_pattern = str(value).replace("*", "%").replace("?", "_")
-            return ~column.ilike(like_pattern) if not case_sensitive else ~column.like(like_pattern)
+            return ~text_column.ilike(like_pattern) if not case_sensitive else ~text_column.like(like_pattern)
         if case_sensitive:
             return column != value
         return func.lower(cast(column, String)) != func.lower(str(value))
@@ -365,37 +378,38 @@ def condition_to_sql_filter(model_class, condition: Dict[str, Any]):
         search_val = str(value or "").replace("*", "")
         if "?" in search_val:
             like_pattern = search_val.replace("?", "_")
-            return column.ilike(f"%{like_pattern}%") if not case_sensitive else column.like(f"%{like_pattern}%")
-        return column.ilike(f"%{search_val}%") if not case_sensitive else column.like(f"%{search_val}%")
+            return text_column.ilike(f"%{like_pattern}%") if not case_sensitive else text_column.like(f"%{like_pattern}%")
+        return text_column.ilike(f"%{search_val}%") if not case_sensitive else text_column.like(f"%{search_val}%")
 
     if operator == "not_contains":
         search_val = str(value or "").replace("*", "")
         if "?" in search_val:
             like_pattern = search_val.replace("?", "_")
-            return ~column.ilike(f"%{like_pattern}%") if not case_sensitive else ~column.like(f"%{like_pattern}%")
-        return ~column.ilike(f"%{search_val}%") if not case_sensitive else ~column.like(f"%{search_val}%")
+            return ~text_column.ilike(f"%{like_pattern}%") if not case_sensitive else ~text_column.like(f"%{like_pattern}%")
+        return ~text_column.ilike(f"%{search_val}%") if not case_sensitive else ~text_column.like(f"%{search_val}%")
 
     if operator == "starts_with":
         pat = str(value or "").replace("*", "%").replace("?", "_")
-        return column.ilike(f"{pat}%") if not case_sensitive else column.like(f"{pat}%")
+        return text_column.ilike(f"{pat}%") if not case_sensitive else text_column.like(f"{pat}%")
 
     if operator == "ends_with":
         pat = str(value or "").replace("*", "%").replace("?", "_")
-        return column.ilike(f"%{pat}") if not case_sensitive else column.like(f"%{pat}")
+        return text_column.ilike(f"%{pat}") if not case_sensitive else text_column.like(f"%{pat}")
 
     if operator == "not_starts_with":
         pat = str(value or "").replace("*", "%").replace("?", "_")
-        return ~column.ilike(f"{pat}%") if not case_sensitive else ~column.like(f"{pat}%")
+        return ~text_column.ilike(f"{pat}%") if not case_sensitive else ~text_column.like(f"{pat}%")
 
     if operator == "not_ends_with":
         pat = str(value or "").replace("*", "%").replace("?", "_")
-        return ~column.ilike(f"%{pat}") if not case_sensitive else ~column.like(f"%{pat}")
+        return ~text_column.ilike(f"%{pat}") if not case_sensitive else ~text_column.like(f"%{pat}")
 
     if operator == "regex":
         # PostgreSQL supports ~ (case sensitive) and ~* (case insensitive)
+        # JSON columns need casting to text first (handled by text_column)
         if case_sensitive:
-            return column.op("~")(str(value))
-        return column.op("~*")(str(value))
+            return text_column.op("~")(str(value))
+        return text_column.op("~*")(str(value))
 
     if operator == "gte":
         return column >= float(value)
