@@ -130,7 +130,7 @@ async def test_full_chain(db: AsyncSession = Depends(get_db)):
 
     # Step 4: Database connectivity
     from app.models.cve import CVE
-    from sqlalchemy import func
+    from sqlalchemy import func, select
     total = (await db.execute(select(func.count()).select_from(CVE))).scalar() or 0
     results.append({"step": "database", "status": "ok", "total_cves": total})
 
