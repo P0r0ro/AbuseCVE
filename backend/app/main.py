@@ -60,6 +60,7 @@ from app.api.routes_alerts import router as alerts_router
 from app.api.routes_ka import router as ka_router
 from app.api.routes_test import router as test_router
 from app.api.routes_health import router as health_router
+from app.api.routes_logs import router as logs_router
 from app.api.routes_integrations import router as integrations_router
 
 app.include_router(dashboard_router)
@@ -69,6 +70,7 @@ app.include_router(alerts_router)
 app.include_router(ka_router)
 app.include_router(test_router)
 app.include_router(health_router)
+app.include_router(logs_router)
 app.include_router(integrations_router)
 
 
