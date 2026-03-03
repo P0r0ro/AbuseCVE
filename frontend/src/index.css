@@ -545,6 +545,12 @@ tr:hover td {
   border: 1px solid rgba(124, 58, 237, 0.3);
 }
 
+.badge-stored {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
 .badge-kev {
   background: rgba(255, 68, 68, 0.2);
   color: #ff6666;

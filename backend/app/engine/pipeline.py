@@ -202,12 +202,15 @@ class CVEPipeline:
             # Still store to DB even without rules
             new_cves, existing = await dedup_and_store(session, cves)
             await session.commit()
+            new_ids = {c.cve_id for c in new_cves}
             return {
                 "new_cves": [],
                 "existing_count": existing,
                 "filtered_count": 0,
                 "total_pooled": len(cves),
                 "stored_without_filter": len(new_cves),
+                "new_cve_ids": new_ids,
+                "all_cve_ids": {c.cve_id for c in cves},
             }
 
         # Apply filters
@@ -223,12 +226,15 @@ class CVEPipeline:
 
         await session.commit()
 
+        new_ids = {c.cve_id for c in all_new}
         return {
             "new_cves": alertable_cves,
             "existing_count": all_existing,
             "filtered_count": len(matches),
             "total_pooled": len(cves),
             "total_new_stored": len(all_new),
+            "new_cve_ids": new_ids,
+            "all_cve_ids": {c.cve_id for c in cves},
             "matches": [
                 {"cve_id": m.cve.cve_id, "rule_id": m.rule_id, "rule_name": m.rule_name}
                 for m in matches
