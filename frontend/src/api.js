@@ -129,6 +129,17 @@ export const uploadMitreData = async (file) => {
     return res.json();
 };
 
+// ── Logs ─────────────────────────────────────
+export const getLogs = (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)); });
+    return request(`/logs?${qs.toString()}`);
+};
+export const getWorkerTypes = () => request('/logs/worker-types');
+export const clearLogs = (workerType) =>
+    request(`/logs/clear${workerType ? `?worker_type=${workerType}` : ''}`, { method: 'DELETE' });
+export const getRedisInfo = () => request('/logs/redis');
+
 
 // ── Integrations ─────────────────────────────
 export const getIntegrations = () => request('/integrations');

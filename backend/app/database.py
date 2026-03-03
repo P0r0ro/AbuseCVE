@@ -40,7 +40,7 @@ async def init_db():
     """Create all tables and add any missing columns (lightweight migration)."""
     async with engine.begin() as conn:
         from app.models import cve, filter_rule, alert_log, knowledge_article, health_report  # noqa
-        from app.models import integration  # noqa  – new tables
+        from app.models import worker_log, integration  # noqa  – new tables
         await conn.run_sync(Base.metadata.create_all)
 
         # Lightweight migration: add columns that may be missing from older schemas.
