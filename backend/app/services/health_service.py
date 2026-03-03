@@ -157,18 +157,6 @@ async def generate_daily_report(session: AsyncSession) -> dict:
         )
     )).scalar() or 0
 
-    alerts_failed_today = (await session.execute(
-        select(func.count()).select_from(AlertLog).where(
-            AlertLog.sent_at >= today_start, AlertLog.status == "failed",
-        )
-    )).scalar() or 0
-
-    alerts_stored_today = (await session.execute(
-        select(func.count()).select_from(AlertLog).where(
-            AlertLog.sent_at >= today_start, AlertLog.status == "stored",
-        )
-    )).scalar() or 0
-
     # CVEs seen today but already existed
     existing_seen = (await session.execute(
         select(func.count()).select_from(CVE).where(
@@ -214,17 +202,11 @@ async def generate_daily_report(session: AsyncSession) -> dict:
     redis_detail = components.get("redis_details", {})
     if isinstance(redis_detail, dict) and redis_detail.get("total_keys", 0) == 0:
         warnings.append("Redis appears empty — Celery broker may not be processing tasks.")
-    if alerts_stored_today > 0 and new_alerted == 0:
-        warnings.append(f"{alerts_stored_today} CVEs were stored today but no filter rules matched — check your rules.")
-    if alerts_failed_today > 0:
-        warnings.append(f"{alerts_failed_today} alert email(s) failed today — check SMTP configuration.")
 
     report_data = {
         "report_date": datetime.utcnow().isoformat(),
         "components_status": components,
         "new_cves_alerted": new_alerted,
-        "alerts_failed_today": alerts_failed_today,
-        "alerts_stored_today": alerts_stored_today,
         "existing_cves_seen": existing_seen,
         "new_cves_today": new_cves_today,
         "total_cves_in_db": total_cves,

@@ -118,8 +118,6 @@ def run_cve_scan(self):
                             recipient=settings.alert_recipients,
                             status="failed",
                             error_message=f"{type(e).__name__}: {str(e)[:500]}",
-                            is_new_cve=True,
-                            rule_name=rule_name,
                         )
                         session.add(alert_log)
 
@@ -139,26 +137,6 @@ def run_cve_scan(self):
                         logger.warning(f"Integration dispatch failed for {cve_data.cve_id}: {ie}")
 
                 await session.commit()
-
-                # Log 'stored' entries for CVEs saved to DB but not alerted
-                # Uses new_cve_ids / all_cve_ids returned by the pipeline
-                alertable_ids = {c.cve_id for c in new_cves}
-                all_cve_ids = result.get("all_cve_ids", set())
-                new_cve_ids = result.get("new_cve_ids", set())
-                stored_logs = []
-                for cve_id in all_cve_ids - alertable_ids:
-                    stored_logs.append(AlertLog(
-                        cve_id=cve_id,
-                        sent_at=datetime.utcnow(),
-                        recipient=None,
-                        status="stored",
-                        is_new_cve=cve_id in new_cve_ids,
-                        rule_name="",
-                    ))
-                if stored_logs:
-                    session.add_all(stored_logs)
-                    await session.commit()
-                    logger.info(f"Logged {len(stored_logs)} stored-only CVEs to alert log")
 
                 scan_summary = {
                     "total_fetched": result.get("total_fetched", 0),

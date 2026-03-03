@@ -67,7 +67,7 @@ export const searchCVEsByPQL = (pql, page = 1, perPage = 50) =>
 // ── Alerts ───────────────────────────────────
 export const getAlerts = (params = {}) => {
     const qs = new URLSearchParams();
-    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, v); });
+    Object.entries(params).forEach(([k, v]) => { if (v) qs.set(k, v); });
     return request(`/alerts?${qs.toString()}`);
 };
 export const getAlertStats = () => request('/alerts/stats');
