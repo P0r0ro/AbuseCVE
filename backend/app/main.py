@@ -58,7 +58,6 @@ from app.api.routes_filters import router as filters_router
 from app.api.routes_cves import router as cves_router
 from app.api.routes_alerts import router as alerts_router
 from app.api.routes_ka import router as ka_router
-from app.api.routes_config import router as config_router
 from app.api.routes_test import router as test_router
 from app.api.routes_health import router as health_router
 from app.api.routes_logs import router as logs_router
@@ -69,7 +68,6 @@ app.include_router(filters_router)
 app.include_router(cves_router)
 app.include_router(alerts_router)
 app.include_router(ka_router)
-app.include_router(config_router)
 app.include_router(test_router)
 app.include_router(health_router)
 app.include_router(logs_router)
