@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getLogs, getWorkerTypes, clearLogs, getRedisInfo } from '../api';
+import { getLogs, getWorkerTypes, clearLogs, getRedisInfo, getSchedule } from '../api';
 
 const LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
 const LEVEL_COLORS = {
@@ -22,6 +22,9 @@ export default function Logs() {
     const [redisInfo, setRedisInfo] = useState(null);
     const [redisLoading, setRedisLoading] = useState(false);
     const [redisError, setRedisError] = useState(null);
+
+    const [schedule, setSchedule] = useState([]);
+    const [now, setNow] = useState(new Date());
 
     const fetchLogs = useCallback(async () => {
         try {
@@ -50,6 +53,11 @@ export default function Logs() {
         return () => clearInterval(id);
     }, [autoRefresh, fetchLogs]);
     useEffect(() => { if (activeTab === 'redis') fetchRedis(); }, [activeTab]);
+    useEffect(() => {
+        getSchedule().then(d => setSchedule(d.schedule || [])).catch(() => { });
+        const tick = setInterval(() => setNow(new Date()), 30000);
+        return () => clearInterval(tick);
+    }, []);
 
     const handleClear = async (type) => {
         if (!confirm(`Clear ${type || 'all'} logs?`)) return;
@@ -96,6 +104,42 @@ export default function Logs() {
             {/* ═══ LOGS TAB ═══ */}
             {activeTab === 'logs' && (
                 <>
+                    {/* Schedule banner */}
+                    {schedule.length > 0 && (
+                        <div className="card mb-20" style={{ padding: '12px 20px' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                                <span style={{ fontSize: 14, fontWeight: 600 }}>⏱️ Scheduled Tasks</span>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                                {schedule.map(item => {
+                                    const nextRun = item.next_run ? new Date(item.next_run) : null;
+                                    const diffMs = nextRun ? nextRun - now : null;
+                                    let countdown = '—';
+                                    if (diffMs !== null && diffMs > 0) {
+                                        const mins = Math.floor(diffMs / 60000);
+                                        const hrs = Math.floor(mins / 60);
+                                        countdown = hrs > 0 ? `in ${hrs}h ${mins % 60}m` : `in ${mins}m`;
+                                    } else if (diffMs !== null) {
+                                        countdown = 'due now';
+                                    }
+                                    return (
+                                        <div key={item.name} style={{
+                                            background: 'var(--bg-secondary)', borderRadius: 8,
+                                            padding: '8px 14px', minWidth: 160,
+                                        }}>
+                                            <div style={{ fontWeight: 600, fontSize: 13 }}>{item.label}</div>
+                                            <div className="text-xs text-muted" style={{ marginTop: 2 }}>{item.schedule_desc}</div>
+                                            <div style={{
+                                                fontSize: 12, fontWeight: 600, marginTop: 4,
+                                                color: diffMs !== null && diffMs < 300000 ? 'var(--warning)' : 'var(--success)',
+                                            }}>{countdown}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
                         <button className={`btn btn-sm ${!filters.worker_type ? 'btn-primary' : 'btn-secondary'}`}
                             onClick={() => { setFilters(f => ({ ...f, worker_type: '' })); setPage(1); }}>

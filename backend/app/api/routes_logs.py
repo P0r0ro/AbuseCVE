@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import pickle
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis as redis_lib
@@ -151,3 +153,92 @@ async def redis_info():
     except Exception as exc:
         logger.warning(f"Redis inspect failed: {exc}")
         raise
+
+
+# ── Schedule ──────────────────────────────────────────────────────────────────
+
+@router.get("/schedule")
+async def get_schedule():
+    """Return the Celery beat schedule with next-run estimates."""
+    from app.config import settings as s
+    from app.tasks.celery_app import celery_app
+
+    now = datetime.now(timezone.utc)
+    schedule = celery_app.conf.beat_schedule or {}
+
+    items = []
+    for name, entry in schedule.items():
+        sched = entry.get("schedule")
+        task = entry.get("task", "")
+
+        # Human-readable label
+        label_map = {
+            "app.tasks.cve_tasks.run_cve_scan": "CVE Scan",
+            "app.tasks.health_tasks.generate_and_send_health_report": "Daily Health Report",
+            "app.tasks.init_tasks.initialize_database": "DB Initialization",
+        }
+        label = label_map.get(task, name)
+
+        # Try to compute interval in seconds + next run
+        interval_seconds = None
+        next_run_iso = None
+        schedule_desc = str(sched)
+
+        try:
+            # Plain interval (seconds)
+            if isinstance(sched, (int, float)):
+                interval_seconds = int(sched)
+                schedule_desc = f"every {interval_seconds // 60} min"
+            elif hasattr(sched, "seconds"):
+                # celery timedelta schedule
+                interval_seconds = int(sched.seconds)
+                schedule_desc = f"every {interval_seconds // 60} min"
+            elif hasattr(sched, "hour"):
+                # crontab – daily at fixed time
+                h = sched.hour
+                m = sched.minute
+                # stringify crontab fields
+                h_str = list(h)[0] if h else 0
+                m_str = list(m)[0] if m else 0
+                schedule_desc = f"daily at {int(h_str):02d}:{int(m_str):02d} UTC"
+                # Next occurrence
+                candidate = now.replace(hour=int(h_str), minute=int(m_str), second=0, microsecond=0)
+                if candidate <= now:
+                    from datetime import timedelta
+                    candidate = candidate + timedelta(days=1)
+                next_run_iso = candidate.isoformat()
+
+            if interval_seconds and not next_run_iso:
+                # Try to read last-run from Celery beat Redis key
+                try:
+                    r = redis_lib.from_url(s.redis_url, decode_responses=False, socket_timeout=3)
+                    raw = r.get("celery-beat-schedule")
+                    r.close()
+                    if raw:
+                        data = pickle.loads(raw)
+                        entry_data = data.get("entries", {}).get(name) or data.get(name)
+                        if entry_data and hasattr(entry_data, "last_run_at") and entry_data.last_run_at:
+                            last = entry_data.last_run_at
+                            if last.tzinfo is None:
+                                last = last.replace(tzinfo=timezone.utc)
+                            from datetime import timedelta
+                            next_run = last + timedelta(seconds=interval_seconds)
+                            if next_run < now:
+                                next_run = now
+                            next_run_iso = next_run.isoformat()
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        items.append({
+            "name": name,
+            "label": label,
+            "task": task,
+            "schedule_desc": schedule_desc,
+            "interval_seconds": interval_seconds,
+            "next_run": next_run_iso,
+        })
+
+    return {"schedule": items, "server_time": now.isoformat()}

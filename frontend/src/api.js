@@ -139,6 +139,7 @@ export const getWorkerTypes = () => request('/logs/worker-types');
 export const clearLogs = (workerType) =>
     request(`/logs/clear${workerType ? `?worker_type=${workerType}` : ''}`, { method: 'DELETE' });
 export const getRedisInfo = () => request('/logs/redis');
+export const getSchedule = () => request('/logs/schedule');
 
 
 // ── Integrations ─────────────────────────────

@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import (
+    worker_init,
+    task_prerun,
+    task_success,
+    task_failure,
+    task_retry,
+)
 from celery.schedules import crontab
 
 from app.config import settings
@@ -75,3 +81,78 @@ def init_worker(**kwargs):
 
     rules = load_rules()
     logger.info(f"Celery worker loaded {len(rules)} filter rules from config")
+
+
+# ── Task lifecycle logging ────────────────────────────────────────────────────
+
+def _task_name_to_worker_type(task_name: str) -> str:
+    """Map full dotted task name to a short human-readable worker type."""
+    mapping = {
+        "app.tasks.cve_tasks.run_cve_scan": "cve_scan",
+        "app.tasks.health_tasks.generate_and_send_health_report": "health",
+        "app.tasks.init_tasks.initialize_database": "init",
+        "app.tasks.init_tasks.initialize_database_local": "init_local",
+        "app.tasks.init_tasks.initialize_database_upload": "init_upload",
+    }
+    return mapping.get(task_name, task_name.split(".")[-1])
+
+
+@task_prerun.connect
+def on_task_prerun(task_id, task, *args, **kwargs):
+    try:
+        from app.tasks.worker_log_writer import write_log
+        write_log(
+            _task_name_to_worker_type(task.name),
+            f"Task started: {task.name}",
+            level="INFO",
+            task_id=task_id,
+        )
+    except Exception as exc:
+        logger.warning(f"on_task_prerun log failed: {exc}")
+
+
+@task_success.connect
+def on_task_success(sender, result, **kwargs):
+    try:
+        from app.tasks.worker_log_writer import write_log
+        write_log(
+            _task_name_to_worker_type(sender.name),
+            f"Task completed successfully: {sender.name}",
+            level="INFO",
+            task_id=sender.request.id,
+            details=str(result)[:1000] if result else None,
+        )
+    except Exception as exc:
+        logger.warning(f"on_task_success log failed: {exc}")
+
+
+@task_failure.connect
+def on_task_failure(task_id, exception, traceback, sender, *args, **kwargs):
+    try:
+        import traceback as tb_mod
+        from app.tasks.worker_log_writer import write_log
+        write_log(
+            _task_name_to_worker_type(sender.name),
+            f"Task FAILED: {type(exception).__name__}: {exception}",
+            level="ERROR",
+            task_id=task_id,
+            details=tb_mod.format_exc()[:2000],
+        )
+    except Exception as exc:
+        logger.warning(f"on_task_failure log failed: {exc}")
+
+
+@task_retry.connect
+def on_task_retry(request, reason, einfo, *args, **kwargs):
+    try:
+        from app.tasks.worker_log_writer import write_log
+        task_name = request.task if hasattr(request, "task") else "unknown"
+        write_log(
+            _task_name_to_worker_type(task_name),
+            f"Task retrying: {reason}",
+            level="WARNING",
+            task_id=request.id,
+            details=str(einfo)[:1000] if einfo else None,
+        )
+    except Exception as exc:
+        logger.warning(f"on_task_retry log failed: {exc}")
