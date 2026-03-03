@@ -29,87 +29,149 @@
 
 rules:
 
-  # ── 1001 ─ Fortinet: FortiEDR / FortiMail / FortiGuard / FortiAnalyzer ────
+  # ── 1001 ─ Fortinet Portfolio ───────────────────────────────────────────────
   - id: 1001
-    name: "Fortinet - FortiEDR / FortiMail / FortiGuard / FortiAnalyzer"
+    name: "Fortinet - FortiGate / FortiEDR / FortiGuard / FortiLabs / FortiAnalyzer / FortiClient"
     enabled: true
     alert_on_modified: true
-    description: >-
-      Monitors Fortinet EDR, Mail, Guard, and Analyzer products across all
-      versions. Matches CVSS >= 3.0 or unrated CVEs.
+    description: "Monitors critical Fortinet infrastructure appliances and endpoints."
     pql: >-
-      (vendor:~"(?i)forti(net)?"
-       OR description:~"(?i)fortinet"
-       OR cpe_names:~"(?i):fortinet:"
-       OR affected_products:~"(?i)fortinet")
-      AND (cvss:>=3.0 OR cvss:blank)
-      AND (description:~"(?i)forti[-_]?edr"
-           OR product:~"(?i)forti[-_]?edr"
-           OR cpe_names:~"(?i):forti_?edr"
-           OR affected_products:~"(?i)forti[-_]?edr"
-           OR description:~"(?i)forti[-_]?mail"
-           OR product:~"(?i)forti[-_]?mail"
-           OR cpe_names:~"(?i):forti_?mail"
-           OR affected_products:~"(?i)forti[-_]?mail"
-           OR description:~"(?i)forti[-_]?guard"
-           OR product:~"(?i)forti[-_]?guard"
-           OR cpe_names:~"(?i):forti_?guard"
-           OR affected_products:~"(?i)forti[-_]?guard"
-           OR description:~"(?i)forti[-_]?analyzer"
-           OR product:~"(?i)forti[-_]?analyzer"
-           OR cpe_names:~"(?i):forti_?analyzer"
-           OR affected_products:~"(?i)forti[-_]?analyzer")
+      (vendor:~"(?i)forti(net)?" OR description:~"(?i)fortinet" OR cpe_names:~"(?i):fortinet:")
+      AND (
+        description:~"(?i)forti[-_]?edr" OR product:~"(?i)forti[-_]?edr" OR
+        description:~"(?i)forti[-_]?gate" OR product:~"(?i)forti[-_]?gate" OR
+        description:~"(?i)forti[-_]?guard" OR product:~"(?i)forti[-_]?guard" OR
+        description:~"(?i)forti[-_]?labs" OR product:~"(?i)forti[-_]?labs" OR
+        description:~"(?i)forti[-_]?analyzer" OR product:~"(?i)forti[-_]?analyzer" OR
+        description:~"(?i)forti[-_]?client" OR product:~"(?i)forti[-_]?client"
+      )
 
-
-  # ── 1002 ─ Wazuh: All modules (excl. EDR Plugins) ─────────────────────────
+  # ── 1002 ─ Wazuh Ecosystem ──────────────────────────────────────────────────
   - id: 1002
-    name: "Wazuh - All (excl. EDR Plugins)"
+    name: "Wazuh - Server / Dashboard"
     enabled: true
     alert_on_modified: true
-    description: >-
-      Monitors all Wazuh CVEs (agent, manager, dashboard, API, indexer)
-      across all versions. CVSS >= 3.0. Excludes third-party EDR plugin CVEs.
+    description: "Monitors Wazuh SIEM components."
     pql: >-
-      (vendor:~"(?i)wazuh"
-       OR description:~"(?i)wazuh"
-       OR product:~"(?i)wazuh"
-       OR cpe_names:~"(?i):wazuh:"
-       OR affected_products:~"(?i)wazuh")
-      AND (cvss:>=3.0 OR cvss:blank)
-      AND description:!"edr plugin"
-      AND description:!edr-plugin
-      AND description:!edr_plugin
+      (vendor:~"(?i)wazuh" OR description:~"(?i)wazuh" OR cpe_names:~"(?i):wazuh:")
+      AND (
+        description:~"(?i)wazuh" OR
+        description:~"(?i)wazuh[-_ ]?dashboard" OR product:~"(?i)dashboard"
+      )
 
-
-  # ── 1003 ─ Microsoft: Azure / Sentinel / Exchange / Office 365 ─────────────
+  # ── 1003 ─ Microsoft Ecosystem (Windows, Server, Azure, M365, Defender, Exchange)
   - id: 1003
-    name: "Microsoft - Azure / Sentinel / Exchange / Office365"
+    name: "Microsoft - Windows / Server / Azure / M365 / Defender / Exchange / Hyper-V"
     enabled: true
     alert_on_modified: true
-    description: >-
-      Monitors Microsoft Azure (all services, Entra ID, Arc, DevOps),
-      Sentinel, Exchange Server/Online, Office 365 / Microsoft 365.
-      CVSS >= 7.0 (HIGH/CRITICAL only, no unrated).
+    description: "Broad Microsoft coverage including Windows, AD, Exchange, Defender, and Hyper-V."
     pql: >-
-      cvss:>=7.0
-      AND (vendor:~"(?i)microsoft"
-           OR description:~"(?i)microsoft"
-           OR cpe_names:~"(?i):microsoft:"
-           OR affected_products:~"(?i)microsoft")
-      AND (description:~"(?i)\bazure\b"
-           OR product:~"(?i)\bazure\b"
-           OR cpe_names:~"(?i):azure"
-           OR affected_products:~"(?i)\bazure\b"
-           OR description:~"(?i)(entra\s+(id|external|workload)|azure\s+(active\s+directory|ad\b))"
-           OR description:~"(?i)(microsoft|azure)\s+sentinel"
-           OR product:~"(?i)sentinel"
-           OR cpe_names:~"(?i):sentinel"
-           OR affected_products:~"(?i)sentinel"
-           OR description:~"(?i)(microsoft\s+)?exchange(\s+(server|online))?"
-           OR product:~"(?i)exchange"
-           OR cpe_names:~"(?i):exchange"
-           OR affected_products:~"(?i)exchange"
-           OR description:~"(?i)(office|microsoft)[\s_-]?365|\bm365\b"
-           OR product:~"(?i)(office|microsoft)[\s_-]?365"
-           OR cpe_names:~"(?i):(office|microsoft)_?365"
-           OR affected_products:~"(?i)(office|microsoft)[\s_-]?365")
+      (vendor:~"(?i)microsoft" OR description:~"(?i)microsoft" OR cpe_names:~"(?i):microsoft:")
+      AND (
+        description:~"(?i)windows\s+(server|10|11)" OR cpe_names:~"(?i)windows_(server|10|11)" OR
+        description:~"(?i)hyper[-_ ]?(v|visor|manager)" OR product:~"(?i)hyper[-_ ]?(v|visor)" OR
+        description:~"(?i)microsoft\s+outlook" OR product:~"(?i)outlook" OR
+        description:~"(?i)\biis\b|internet\s+information\s+services" OR
+        description:~"(?i)(office|microsoft)[\s_-]?365|\bm365\b" OR
+        description:~"(?i)microsoft\s+defender" OR product:~"(?i)defender" OR
+        description:~"(?i)sharepoint" OR product:~"(?i)sharepoint" OR
+        description:~"(?i)exchange\s+server" OR product:~"(?i)exchange" OR
+        description:~"(?i)\bazure\b" OR product:~"(?i)azure" OR
+        description:~"(?i)entra(\s+id)?" OR product:~"(?i)entra" OR
+        description:~"(?i)active\s+directory|\baad\b" OR product:~"(?i)active\s+directory" OR
+        description:~"(?i)(microsoft|azure)\s+sentinel" OR product:~"(?i)sentinel"
+      )
+
+  # ── 1004 ─ Cisco Infrastructure ─────────────────────────────────────────────
+  - id: 1004
+    name: "Cisco - FTD / ASA / AnyConnect"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors Cisco Firepower, ASA firewalls, and AnyConnect VPNs."
+    pql: >-
+      (vendor:~"(?i)cisco" OR description:~"(?i)cisco" OR cpe_names:~"(?i):cisco:")
+      AND (
+        description:~"(?i)\bftd\b|firepower\s+threat\s+defense" OR product:~"(?i)firepower" OR
+        description:~"(?i)\basa\b|adaptive\s+security\s+appliance" OR product:~"(?i)adaptive_security_appliance" OR
+        description:~"(?i)anyconnect" OR product:~"(?i)anyconnect" OR cpe_names:~"(?i)anyconnect"
+      )
+
+  # ── 1005 ─ Virtualization & Backup (VMware, Veeam) ──────────────────────────
+  - id: 1005
+    name: "Virtualization & Backup - VMware ESXi / Veeam"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors ESXi hypervisors and Veeam backup infrastructure."
+    pql: >-
+      (vendor:~"(?i)vmware" OR description:~"(?i)vmware(\s+esxi)?\b" OR product:~"(?i)esxi" OR cpe_names:~"(?i):esxi:")
+      OR
+      (vendor:~"(?i)veeam" OR description:~"(?i)veeam" OR product:~"(?i)veeam" OR cpe_names:~"(?i):veeam:")
+
+  # ── 1006 ─ Citrix Ecosystem ─────────────────────────────────────────────────
+  - id: 1006
+    name: "Citrix - NetScaler / ADC / Gateway / Receiver"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors Citrix NetScaler, Gateway, and Workspace/Receiver clients."
+    pql: >-
+      (vendor:~"(?i)citrix" OR description:~"(?i)citrix" OR cpe_names:~"(?i):citrix:")
+      AND (
+        description:~"(?i)netscaler" OR product:~"(?i)netscaler" OR
+        description:~"(?i)\badc\b" OR product:~"(?i)adc" OR
+        description:~"(?i)gateway" OR product:~"(?i)gateway" OR
+        description:~"(?i)receiver" OR product:~"(?i)receiver" OR
+        description:~"(?i)workspace" OR product:~"(?i)workspace"
+      )
+
+  # ── 1007 ─ Web Apps & DBA (phpMyAdmin, WPS Office) ──────────────────────────
+  - id: 1007
+    name: "Web Apps & Productivity - phpMyAdmin / WPS Office"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors common remote DBA tools and productivity suites."
+    pql: >-
+      (description:~"(?i)phpmyadmin" OR product:~"(?i)phpmyadmin" OR cpe_names:~"(?i):phpmyadmin:")
+      OR
+      (vendor:~"(?i)kingsoft" OR description:~"(?i)wps\s+office" OR product:~"(?i)wps[_ ]office" OR cpe_names:~"(?i):wps[_ ]office:")
+
+  # ── 1008 ─ Remote Access & IT Tools ─────────────────────────────────────────
+  - id: 1008
+    name: "Remote Access & IT Tools - AnyDesk / TeamViewer / SecureCRT"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors common RMM, remote desktop, and IT networking tools."
+    pql: >-
+      description:~"(?i)anydesk" OR product:~"(?i)anydesk" OR cpe_names:~"(?i):anydesk:"
+      OR description:~"(?i)teamviewer" OR product:~"(?i)teamviewer" OR cpe_names:~"(?i):teamviewer:"
+      OR description:~"(?i)securecrt" OR product:~"(?i)securecrt" OR cpe_names:~"(?i):securecrt:"
+
+  # ── 1009 ─ Security Tools (Velociraptor, FreeRadius, Barracuda) ─────────────
+  - id: 1009
+    name: "Security Tools - Velociraptor / FreeRADIUS / Barracuda"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors DFIR tools, RADIUS auth servers, and Barracuda email filters."
+    pql: >-
+      description:~"(?i)velociraptor" OR product:~"(?i)velociraptor" OR cpe_names:~"(?i):velociraptor:"
+      OR (
+        (description:~"(?i)freeradius" OR product:~"(?i)freeradius" OR description:~"(?i)radius\s+(server|protocol)")
+        AND (vendor:~"(?i)freeradius" OR cpe_names:~"(?i):freeradius:")
+      )
+      OR (
+        (vendor:~"(?i)barracuda" OR description:~"(?i)barracuda" OR cpe_names:~"(?i):barracuda:")
+        AND (description:~"(?i)mail|email|filter")
+      )
+
+  # ── 1010 ─ Enterprise Linux OS ──────────────────────────────────────────────
+  - id: 1010
+    name: "Enterprise Linux - Ubuntu / RHEL / Oracle / Alma"
+    enabled: true
+    alert_on_modified: true
+    description: "Monitors critical OS infrastructure for high-severity kernel/core package vulns."
+    pql: >-
+      (cvss:>=7.0) AND (
+        description:~"(?i)ubuntu" OR product:~"(?i)ubuntu" OR cpe_names:~"(?i):ubuntu_linux:" OR
+        description:~"(?i)red[-_ ]?hat(\s+enterprise\s+linux)?|\brhel\b" OR vendor:~"(?i)redhat" OR cpe_names:~"(?i):enterprise_linux:" OR
+        description:~"(?i)oracle\s+linux|\bol[_-]" OR vendor:~"(?i)oracle" OR cpe_names:~"(?i):oracle_linux:" OR
+        description:~"(?i)alma\s*linux" OR vendor:~"(?i)almalinux" OR cpe_names:~"(?i):almalinux:"
+      )
