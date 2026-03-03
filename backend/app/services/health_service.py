@@ -150,10 +150,20 @@ async def generate_daily_report(session: AsyncSession) -> dict:
     # Component health (includes Redis detail)
     components = await check_component_health()
 
-    # Today's alert stats
+    # Today's alert stats — sent, failed, new CVE
     new_alerted = (await session.execute(
         select(func.count()).select_from(AlertLog).where(
             AlertLog.sent_at >= today_start, AlertLog.status == "sent",
+        )
+    )).scalar() or 0
+    alerts_failed_today = (await session.execute(
+        select(func.count()).select_from(AlertLog).where(
+            AlertLog.sent_at >= today_start, AlertLog.status == "failed",
+        )
+    )).scalar() or 0
+    new_cve_alerts_today = (await session.execute(
+        select(func.count()).select_from(AlertLog).where(
+            AlertLog.sent_at >= today_start, AlertLog.is_new_cve == True,
         )
     )).scalar() or 0
 
@@ -207,6 +217,8 @@ async def generate_daily_report(session: AsyncSession) -> dict:
         "report_date": datetime.utcnow().isoformat(),
         "components_status": components,
         "new_cves_alerted": new_alerted,
+        "alerts_failed_today": alerts_failed_today,
+        "new_cve_alerts_today": new_cve_alerts_today,
         "existing_cves_seen": existing_seen,
         "new_cves_today": new_cves_today,
         "total_cves_in_db": total_cves,

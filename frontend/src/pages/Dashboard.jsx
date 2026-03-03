@@ -62,6 +62,12 @@ export default function Dashboard() {
 
     useEffect(() => { fetchData(); }, []);
 
+    // Auto-refresh dashboard every 60s so new alerts/CVEs appear without manual refresh
+    useEffect(() => {
+        const interval = setInterval(fetchData, 60_000);
+        return () => clearInterval(interval);
+    }, []);
+
     // Poll task status — persists across tab switches
     const pollTask = useCallback(async () => {
         const task = getStoredTask();

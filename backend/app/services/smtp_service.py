@@ -400,7 +400,9 @@ def _fallback_health_html(report: dict) -> str:
     components = report.get("components_status", {})
     comp_rows = ""
     for name, status in components.items():
-        color = "#4ADE80" if status == "ok" else "#FF4444"
+        if isinstance(status, dict):
+            continue  # skip nested dicts (redis_details, etc.)
+        color = "#4ADE80" if (isinstance(status, str) and status.startswith("ok")) else "#FF4444"
         comp_rows += f'<tr><td style="padding:8px;color:#E0E0E0;">{name}</td>' \
                      f'<td style="padding:8px;color:{color};font-weight:bold;">{status}</td></tr>'
 
@@ -415,7 +417,10 @@ def _fallback_health_html(report: dict) -> str:
                 {comp_rows}
             </table>
             <div style="margin-top: 20px; padding: 15px; background: rgba(124,58,237,0.1); border-radius: 8px;">
-                <p>🆕 New CVEs Alerted Today: <strong>{report.get("new_cves_alerted", 0)}</strong></p>
+                <h3 style="color:#A855F7;margin:0 0 10px 0;">Today's Alert Activity</h3>
+                <p>✅ Alerts Sent Today: <strong>{report.get("new_cves_alerted", 0)}</strong></p>
+                <p>❌ Alerts Failed Today: <strong>{report.get("alerts_failed_today", 0)}</strong></p>
+                <p>🆕 New CVE Alerts Today: <strong>{report.get("new_cve_alerts_today", 0)}</strong></p>
                 <p>📋 Existing CVEs Seen: <strong>{report.get("existing_cves_seen", 0)}</strong></p>
                 <p>🗄️ Total CVEs in DB: <strong>{report.get("total_cves_in_db", 0)}</strong></p>
                 <p>🔍 Active Filters: <strong>{report.get("active_filters", 0)}</strong></p>
@@ -423,3 +428,4 @@ def _fallback_health_html(report: dict) -> str:
         </div>
     </div>
     """
+

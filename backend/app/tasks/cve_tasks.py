@@ -92,6 +92,8 @@ def run_cve_scan(self):
                             recipient=settings.alert_recipients,
                             status=email_result.get("status", "unknown"),
                             error_message=email_result.get("error"),
+                            rule_name=rule_name,
+                            is_new_cve=True,
                         )
                         session.add(alert_log)
 
@@ -118,6 +120,8 @@ def run_cve_scan(self):
                             recipient=settings.alert_recipients,
                             status="failed",
                             error_message=f"{type(e).__name__}: {str(e)[:500]}",
+                            rule_name=rule_name,
+                            is_new_cve=True,
                         )
                         session.add(alert_log)
 
