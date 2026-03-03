@@ -140,6 +140,25 @@ def run_cve_scan(self):
                     except Exception as ie:
                         logger.warning(f"Integration dispatch failed for {cve_data.cve_id}: {ie}")
 
+                # Log all NEW CVEs that did NOT get an alert email as status="stored"
+                # so the Alerts tab shows every incoming CVE, not just emailed ones.
+                alerted_ids = {cve_data.cve_id for cve_data in new_cves}
+                all_new_cves = result.get("all_new_cves", [])
+                unmatched_new = [c for c in all_new_cves if c.cve_id not in alerted_ids]
+
+                if unmatched_new:
+                    logger.info(f"Logging {len(unmatched_new)} non-alerted new CVEs as 'stored'")
+                    for cve_data in unmatched_new:
+                        session.add(AlertLog(
+                            cve_id=cve_data.cve_id,
+                            sent_at=datetime.utcnow(),
+                            recipient=None,
+                            status="stored",
+                            error_message=None,
+                            rule_name=None,
+                            is_new_cve=True,
+                        ))
+
                 await session.commit()
 
                 scan_summary = {

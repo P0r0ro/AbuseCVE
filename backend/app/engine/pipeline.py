@@ -204,6 +204,7 @@ class CVEPipeline:
             await session.commit()
             return {
                 "new_cves": [],
+                "all_new_cves": new_cves,
                 "existing_count": existing,
                 "filtered_count": 0,
                 "total_pooled": len(cves),
@@ -225,6 +226,7 @@ class CVEPipeline:
 
         return {
             "new_cves": alertable_cves,
+            "all_new_cves": all_new,
             "existing_count": all_existing,
             "filtered_count": len(matches),
             "total_pooled": len(cves),
