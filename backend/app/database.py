@@ -57,6 +57,9 @@ async def init_db():
             ("cves", "cvss_scores", "JSONB"),
             ("cves", "weaknesses", "JSONB"),
             ("cves", "affected_products", "JSONB"),
+            # AlertLog new columns
+            ("alert_logs", "rule_name", "VARCHAR(255)"),
+            ("alert_logs", "is_new_cve", "BOOLEAN"),
         ]
 
         from sqlalchemy import text
