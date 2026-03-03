@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from app.database import Base
 
 
@@ -11,12 +11,12 @@ class AlertLog(Base):
     __tablename__ = "alert_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    cve_id = Column(String(30), ForeignKey("cves.cve_id"), nullable=False, index=True)
+    cve_id = Column(String(30), nullable=False, index=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
     recipient = Column(String(500), nullable=True)
     status = Column(String(20), default="sent")  # sent, failed, stored (no rule match)
     error_message = Column(Text, nullable=True)
-    filter_rule_id = Column(Integer, ForeignKey("filter_rules.id"), nullable=True)
+    filter_rule_id = Column(Integer, nullable=True)
     rule_name = Column(String(255), nullable=True)   # which filter triggered the alert
     is_new_cve = Column(Boolean, nullable=True)       # True = brand new CVE, False = duplicate/update
 
