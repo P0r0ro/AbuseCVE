@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getKAs, deleteKA, generateKA, exportKA, getCVEs } from '../api';
+import { getKAs, deleteKA, generateKA, exportKA, getCVEs, getAIStatus, generateBatchKA } from '../api';
 
 export default function KnowledgeArticles() {
     const [kas, setKAs] = useState([]);
@@ -11,6 +11,18 @@ export default function KnowledgeArticles() {
     const [cveResults, setCveResults] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
     const [aiProvider, setAiProvider] = useState('auto');
+    const [aiStatus, setAiStatus] = useState(null);
+    const [selectedCves, setSelectedCves] = useState(new Set());
+    const [batchGenerating, setBatchGenerating] = useState(false);
+
+    const fetchAIStatus = async () => {
+        try {
+            const status = await getAIStatus();
+            setAiStatus(status);
+        } catch (e) {
+            console.error('Failed to check AI status:', e);
+        }
+    };
 
     const fetchKAs = async () => {
         try {
@@ -23,20 +35,70 @@ export default function KnowledgeArticles() {
         }
     };
 
-    useEffect(() => { fetchKAs(); }, []);
+    useEffect(() => { fetchKAs(); fetchAIStatus(); }, []);
 
     const handleGenerate = async (cveId) => {
         setGenerating(cveId);
         setGenStatus(`Generating report for ${cveId}...`);
         try {
             const result = await generateKA(cveId, aiProvider);
-            setGenStatus(`✅ Report generated for ${cveId}`);
+            let statusMsg = `✅ Report generated for ${cveId}`;
+            if (result.ai_status === 'fallback_to_template' && result.ai_error) {
+                statusMsg += ` (AI unavailable: ${result.ai_error} — used template)`;
+            } else if (result.generation_method && result.generation_method.startsWith('ai_')) {
+                statusMsg += ` (via ${result.generation_method.replace('ai_', '').toUpperCase()})`;
+            }
+            setGenStatus(statusMsg);
             setShowPreview(result);
             fetchKAs();
         } catch (e) {
             setGenStatus(`❌ Generation failed: ${e.message}`);
         } finally {
             setGenerating('');
+        }
+    };
+
+    const handleBatchGenerate = async () => {
+        const cveIds = Array.from(selectedCves);
+        if (cveIds.length < 2) return;
+        setBatchGenerating(true);
+        setGenStatus(`Generating batch report for ${cveIds.length} CVEs...`);
+        try {
+            const result = await generateBatchKA(cveIds, aiProvider);
+            let statusMsg = `✅ Batch report generated for ${result.cve_count || cveIds.length} CVEs`;
+            if (result.missing_cves?.length) {
+                statusMsg += ` (${result.missing_cves.length} not found)`;
+            }
+            if (result.ai_status === 'fallback_to_template' && result.ai_error) {
+                statusMsg += ` (AI unavailable — used template)`;
+            } else if (result.generation_method?.startsWith('ai_')) {
+                statusMsg += ` (via ${result.generation_method.replace('ai_', '').toUpperCase()})`;
+            }
+            setGenStatus(statusMsg);
+            setShowPreview(result);
+            setSelectedCves(new Set());
+            fetchKAs();
+        } catch (e) {
+            setGenStatus(`❌ Batch generation failed: ${e.message}`);
+        } finally {
+            setBatchGenerating(false);
+        }
+    };
+
+    const toggleCveSelection = (cveId) => {
+        setSelectedCves(prev => {
+            const next = new Set(prev);
+            if (next.has(cveId)) next.delete(cveId);
+            else next.add(cveId);
+            return next;
+        });
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedCves.size === cveResults.length) {
+            setSelectedCves(new Set());
+        } else {
+            setSelectedCves(new Set(cveResults.map(c => c.cve_id)));
         }
     };
 
@@ -68,8 +130,9 @@ export default function KnowledgeArticles() {
     const handleCVESearch = async () => {
         if (!cveSearch.trim()) return;
         setSearchLoading(true);
+        setSelectedCves(new Set());
         try {
-            const result = await getCVEs({ search: cveSearch, per_page: 20 });
+            const result = await getCVEs({ search: cveSearch, per_page: 50 });
             setCveResults(result.cves || []);
         } catch (e) {
             console.error('Search failed:', e);
@@ -97,13 +160,22 @@ export default function KnowledgeArticles() {
                 </div>
             )}
 
+            {/* AI Key Warning */}
+            {aiStatus && !aiStatus.any_configured && (
+                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: 'var(--warning)', background: 'rgba(255,215,0,0.05)' }}>
+                    <span className="text-sm" style={{ color: 'var(--warning)' }}>
+                        No AI API keys configured. Add MISTRAL_API_KEY or GEMINI_API_KEY to your .env file for AI-powered reports. Currently using template-based generation only.
+                    </span>
+                </div>
+            )}
+
             {/* Generate Section */}
             <div className="card mb-24">
                 <div className="card-header">
                     <div className="card-title">🤖 Generate Vulnerability Report</div>
                 </div>
                 <div style={{ padding: '0 20px 20px' }}>
-                    <p className="text-sm text-muted mb-16">Search for a CVE in the database, then click Generate to create a report.</p>
+                    <p className="text-sm text-muted mb-16">Search for CVEs, then generate individual or batch reports. Select multiple CVEs for a consolidated batch KA.</p>
 
                     <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                         <input className="form-input" placeholder="Search CVE ID, vendor, product..."
@@ -115,7 +187,7 @@ export default function KnowledgeArticles() {
                     </div>
 
                     {/* AI Provider Selection */}
-                    <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
                         <span className="text-sm text-muted" style={{ marginTop: 4 }}>AI Provider:</span>
                         {['auto', 'mistral', 'gemini', 'template'].map(p => (
                             <label key={p} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -125,14 +197,56 @@ export default function KnowledgeArticles() {
                         ))}
                     </div>
 
+                    {/* Batch Generate Bar */}
+                    {selectedCves.size >= 2 && (
+                        <div style={{
+                            display: 'flex', gap: 12, alignItems: 'center', padding: '10px 16px',
+                            background: 'rgba(124,58,237,0.1)', borderRadius: 8, marginBottom: 16,
+                            border: '1px solid rgba(124,58,237,0.3)',
+                        }}>
+                            <span className="text-sm" style={{ color: 'var(--purple-400)', fontWeight: 600 }}>
+                                {selectedCves.size} CVEs selected
+                            </span>
+                            <button className="btn btn-primary" style={{ padding: '6px 16px', fontSize: 13 }}
+                                onClick={handleBatchGenerate} disabled={batchGenerating}>
+                                {batchGenerating ? '⏳ Generating Batch...' : '📝 Generate Batch KA'}
+                            </button>
+                            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
+                                onClick={() => setSelectedCves(new Set())}>
+                                ✕ Clear Selection
+                            </button>
+                        </div>
+                    )}
+
                     {/* Search Results */}
                     {cveResults.length > 0 && (
-                        <div className="table-container" style={{ maxHeight: 300, overflow: 'auto' }}>
+                        <div className="table-container" style={{ maxHeight: 400, overflow: 'auto' }}>
                             <table>
-                                <thead><tr><th>CVE ID</th><th>Vendor</th><th>Severity</th><th>CVSS</th><th>Action</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th style={{ width: 40 }}>
+                                            <input type="checkbox"
+                                                checked={cveResults.length > 0 && selectedCves.size === cveResults.length}
+                                                onChange={toggleSelectAll}
+                                                title="Select All" />
+                                        </th>
+                                        <th>CVE ID</th>
+                                        <th>Vendor</th>
+                                        <th>Severity</th>
+                                        <th>CVSS</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
                                     {cveResults.map(cve => (
-                                        <tr key={cve.cve_id}>
+                                        <tr key={cve.cve_id} style={{
+                                            background: selectedCves.has(cve.cve_id) ? 'rgba(124,58,237,0.08)' : undefined,
+                                        }}>
+                                            <td>
+                                                <input type="checkbox"
+                                                    checked={selectedCves.has(cve.cve_id)}
+                                                    onChange={() => toggleCveSelection(cve.cve_id)} />
+                                            </td>
                                             <td className="text-mono" style={{ color: 'var(--purple-400)' }}>{cve.cve_id}</td>
                                             <td className="text-sm">{cve.vendor || '—'}</td>
                                             <td><span className={`badge badge-${(cve.severity || 'unknown').toLowerCase()}`}>{cve.severity || 'N/A'}</span></td>
@@ -187,6 +301,7 @@ export default function KnowledgeArticles() {
                         <div className="text-sm text-muted" style={{ marginTop: 12 }}>
                             Method: {showPreview.generation_method || 'template'} |
                             Status: {showPreview.status}
+                            {showPreview.cve_count && ` | CVEs: ${showPreview.cve_count}`}
                         </div>
                     </div>
                 </div>
@@ -213,8 +328,10 @@ export default function KnowledgeArticles() {
                             {kas.map(ka => (
                                 <tr key={ka.id}>
                                     <td style={{ fontWeight: 600, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{ka.title}</td>
-                                    <td className="text-mono text-sm" style={{ color: 'var(--purple-400)' }}>
-                                        {(ka.cve_ids || []).join(', ')}
+                                    <td className="text-mono text-sm" style={{ color: 'var(--purple-400)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {(ka.cve_ids || []).length > 3
+                                            ? `${ka.cve_ids.slice(0, 3).join(', ')} +${ka.cve_ids.length - 3} more`
+                                            : (ka.cve_ids || []).join(', ')}
                                     </td>
                                     <td><span className={`badge ${ka.status === 'published' ? 'badge-success' : 'badge-warning'}`}>{ka.status}</span></td>
                                     <td className="text-sm">{ka.author || '—'}</td>

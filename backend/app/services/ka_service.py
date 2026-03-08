@@ -251,11 +251,21 @@ Affected products:
 Keep it concise, professional, and actionable. Focus on what security teams need to know."""
 
 
-async def _generate_with_mistral(prompt: str) -> Optional[str]:
+class AIResult:
+    """Holds AI generation result with status details."""
+    def __init__(self, content: Optional[str] = None, provider_used: Optional[str] = None,
+                 status: str = "success", error: Optional[str] = None):
+        self.content = content
+        self.provider_used = provider_used
+        self.status = status  # "success", "key_not_configured", "api_error", "fallback_to_template"
+        self.error = error
+
+
+async def _generate_with_mistral(prompt: str) -> AIResult:
     """Generate KA content using Mistral AI free API."""
     api_key = getattr(settings, "mistral_api_key", None)
     if not api_key:
-        return None
+        return AIResult(status="key_not_configured", error="Mistral API key not configured")
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -277,17 +287,23 @@ async def _generate_with_mistral(prompt: str) -> Optional[str]:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            return AIResult(content=content, provider_used="mistral", status="success")
+    except httpx.HTTPStatusError as e:
+        error_msg = f"Mistral API error {e.response.status_code}: {e.response.text[:200]}"
+        logger.error(error_msg)
+        return AIResult(status="api_error", error=error_msg)
     except Exception as e:
-        logger.error(f"Mistral AI generation failed: {e}")
-        return None
+        error_msg = f"Mistral AI generation failed: {str(e)}"
+        logger.error(error_msg)
+        return AIResult(status="api_error", error=error_msg)
 
 
-async def _generate_with_gemini(prompt: str) -> Optional[str]:
+async def _generate_with_gemini(prompt: str) -> AIResult:
     """Generate KA content using Google Gemini free API."""
     api_key = getattr(settings, "gemini_api_key", None)
     if not api_key:
-        return None
+        return AIResult(status="key_not_configured", error="Gemini API key not configured")
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -308,20 +324,23 @@ async def _generate_with_gemini(prompt: str) -> Optional[str]:
             if candidates:
                 parts = candidates[0].get("content", {}).get("parts", [])
                 if parts:
-                    return parts[0].get("text", "")
+                    content = parts[0].get("text", "")
+                    if content:
+                        return AIResult(content=content, provider_used="gemini", status="success")
+            return AIResult(status="api_error", error="Gemini returned empty response")
+    except httpx.HTTPStatusError as e:
+        error_msg = f"Gemini API error {e.response.status_code}: {e.response.text[:200]}"
+        logger.error(error_msg)
+        return AIResult(status="api_error", error=error_msg)
     except Exception as e:
-        logger.error(f"Gemini AI generation failed: {e}")
-    return None
+        error_msg = f"Gemini AI generation failed: {str(e)}"
+        logger.error(error_msg)
+        return AIResult(status="api_error", error=error_msg)
 
 
-async def generate_with_ai(cve_data: dict, provider: str = "auto") -> Optional[str]:
-    """Generate KA content using AI (Mistral or Gemini).
-
-    Args:
-        cve_data: CVE data dict
-        provider: "mistral", "gemini", or "auto" (tries both)
-    """
-    prompt = AI_PROMPT_TEMPLATE.format(
+def _build_ai_prompt(cve_data: dict) -> str:
+    """Build the AI prompt from CVE data."""
+    return AI_PROMPT_TEMPLATE.format(
         cve_id=cve_data.get("cve_id", "N/A"),
         vendor=cve_data.get("vendor", "N/A"),
         product=cve_data.get("product", "N/A"),
@@ -334,17 +353,44 @@ async def generate_with_ai(cve_data: dict, provider: str = "auto") -> Optional[s
         references="\n".join(cve_data.get("references", [])[:5]) or "N/A",
     )
 
+
+async def generate_with_ai(cve_data: dict, provider: str = "auto") -> AIResult:
+    """Generate KA content using AI (Mistral or Gemini).
+
+    Args:
+        cve_data: CVE data dict
+        provider: "mistral", "gemini", or "auto" (tries both)
+
+    Returns:
+        AIResult with content, status, and error details
+    """
+    prompt = _build_ai_prompt(cve_data)
+    errors = []
+
     if provider == "mistral" or provider == "auto":
         result = await _generate_with_mistral(prompt)
-        if result:
+        if result.status == "success" and result.content:
             return result
+        errors.append(result.error or "Mistral failed")
 
     if provider == "gemini" or provider == "auto":
         result = await _generate_with_gemini(prompt)
-        if result:
+        if result.status == "success" and result.content:
             return result
+        errors.append(result.error or "Gemini failed")
 
-    return None
+    return AIResult(status="api_error", error="; ".join(errors))
+
+
+def check_ai_keys_status() -> dict:
+    """Check which AI keys are configured (without exposing them)."""
+    mistral_key = getattr(settings, "mistral_api_key", "")
+    gemini_key = getattr(settings, "gemini_api_key", "")
+    return {
+        "mistral_configured": bool(mistral_key),
+        "gemini_configured": bool(gemini_key),
+        "any_configured": bool(mistral_key or gemini_key),
+    }
 
 
 # ── Main Service Functions ───────────────────────────────
@@ -398,23 +444,33 @@ async def generate_ka_for_cve(
     cve_data = cve.to_dict()
 
     # Try AI generation first (unless explicitly template)
-    ai_content = None
+    ai_result = None
+    ai_error = None
+    ai_status = "not_attempted"
     if ai_provider != "template":
         try:
-            ai_content = await generate_with_ai(cve_data, provider=ai_provider)
+            ai_result = await generate_with_ai(cve_data, provider=ai_provider)
+            ai_status = ai_result.status
+            if ai_result.status != "success":
+                ai_error = ai_result.error
+                logger.warning(f"AI generation issue for {cve_id}: {ai_error}")
         except Exception as e:
+            ai_error = str(e)
+            ai_status = "api_error"
             logger.warning(f"AI generation failed, falling back to template: {e}")
 
     # Generate template-based report (always available)
     template_report = generate_report_template(cve_data)
 
     # Determine final content
-    if ai_content:
-        content = ai_content
-        generation_method = f"ai_{ai_provider}"
+    if ai_result and ai_result.status == "success" and ai_result.content:
+        content = ai_result.content
+        generation_method = f"ai_{ai_result.provider_used or ai_provider}"
     else:
         content = template_report["text"]
         generation_method = "template"
+        if ai_provider != "template":
+            ai_status = "fallback_to_template"
 
     # Build title
     severity = cve_data.get("severity", "UNKNOWN")
@@ -439,5 +495,277 @@ async def generate_ka_for_cve(
     result_dict["html_content"] = template_report["html"]
     result_dict["text_content"] = template_report["text"]
     result_dict["generation_method"] = generation_method
+    result_dict["ai_status"] = ai_status
+    if ai_error:
+        result_dict["ai_error"] = ai_error
+
+    return result_dict
+
+
+# ── Batch KA Generation ─────────────────────────────
+
+BATCH_AI_PROMPT_TEMPLATE = """You are a cybersecurity analyst. Generate a consolidated vulnerability batch report covering the following {count} CVEs from the same vendor batch release.
+
+CVE Details:
+{cve_details}
+
+Follow this EXACT format:
+
+**Batch Vulnerability Report**
+**{vendor} — {count} Vulnerabilities**
+
+**Overview**
+
+[Brief summary of the batch: what vendor, how many CVEs, severity distribution, common themes]
+
+{per_cve_section}
+
+**Overall Mitigation Recommendations**
+
+[Consolidated mitigation steps applicable across all CVEs]
+
+**References**
+
+[Consolidated reference URLs]
+
+Keep it concise, professional, and actionable. Group related CVEs where possible."""
+
+
+def _generate_batch_template(cve_data_list: List[dict]) -> Dict[str, str]:
+    """Generate a batch vulnerability report from multiple CVEs using template."""
+    vendors = set()
+    all_refs = []
+    all_affected = []
+    severity_counts = {}
+
+    cve_sections_text = []
+    cve_sections_html = []
+
+    for cve_data in cve_data_list:
+        cve_id = cve_data.get("cve_id", "N/A")
+        description = cve_data.get("description", "No description available.")
+        severity = cve_data.get("severity", "UNKNOWN")
+        cvss_score = cve_data.get("cvss_score")
+        vendor = cve_data.get("vendor", "N/A")
+        product = cve_data.get("product", "N/A")
+        kev_flag = cve_data.get("kev_flag", False)
+        references = cve_data.get("references", [])
+
+        vendors.add(vendor)
+        all_refs.extend(references[:3])
+        all_affected.extend(cve_data.get("affected_products", [])[:5])
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+        sev_line = f"{cvss_score} - {_severity_label(cvss_score)}" if cvss_score else severity
+
+        cve_sections_text.append(f"""--- {cve_id} ---
+Severity: {sev_line}
+Product: {vendor} {product}
+{'KEV: Active exploitation confirmed' if kev_flag else ''}
+{description[:300]}
+""")
+
+        severity_colors = {"CRITICAL": "#FF4444", "HIGH": "#FF8C00", "MEDIUM": "#FFD700", "LOW": "#00CED1"}
+        s_color = severity_colors.get(severity, "#888")
+        cve_sections_html.append(f"""
+        <div style="margin:15px 0;padding:15px;background:rgba(0,0,0,0.3);border-radius:8px;border-left:3px solid {s_color};">
+            <h3 style="color:#E0E0E0;margin:0 0 8px 0;">{cve_id}</h3>
+            <p><strong>Severity:</strong> <span style="color:{s_color};font-weight:bold;">{sev_line}</span></p>
+            <p><strong>Product:</strong> {vendor} {product}</p>
+            {"<p style='color:#FF8C00;font-weight:bold;'>KEV — active exploitation confirmed.</p>" if kev_flag else ""}
+            <p style="line-height:1.5;">{description[:300]}{'...' if len(description) > 300 else ''}</p>
+        </div>""")
+
+    vendor_str = ", ".join(sorted(vendors)) if vendors else "Multiple Vendors"
+    sev_summary = ", ".join(f"{k}: {v}" for k, v in sorted(severity_counts.items()))
+
+    text_report = f"""Batch Vulnerability Report
+{'=' * 60}
+Vendor(s): {vendor_str}
+Total CVEs: {len(cve_data_list)}
+Severity Distribution: {sev_summary}
+
+{'=' * 60}
+CVE DETAILS
+{'=' * 60}
+
+{"".join(cve_sections_text)}
+
+{'=' * 60}
+OVERALL MITIGATION
+{'=' * 60}
+
+It is highly advised to check each vendor advisory and upgrade to the latest patched versions.
+Apply patches in order of severity (Critical first).
+
+{'=' * 60}
+REFERENCES
+{'=' * 60}
+
+{chr(10).join(f"  {ref}" for ref in dict.fromkeys(all_refs))}
+
+{'=' * 60}
+Generated by AbuseCVE | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+"""
+
+    html_report = f"""
+    <div style="font-family:'Inter',sans-serif;background:#0F0F1A;color:#E0E0E0;padding:40px;">
+    <div style="max-width:700px;margin:0 auto;background:#1A1A2E;border-radius:12px;
+                border:1px solid rgba(124,58,237,0.3);padding:40px;">
+        <h1 style="color:#A855F7;margin:0 0 10px 0;">Batch Vulnerability Report</h1>
+        <h2 style="color:#E0E0E0;margin:0 0 5px 0;">{vendor_str}</h2>
+        <p style="color:#7C3AED;margin:0 0 20px 0;">{len(cve_data_list)} Vulnerabilities | {sev_summary}</p>
+
+        {"".join(cve_sections_html)}
+
+        <h3 style="color:#A855F7;text-decoration:underline;margin-top:25px;">Overall Mitigation</h3>
+        <p>It is highly advised to check each vendor advisory and upgrade to the latest patched versions.
+        Apply patches in order of severity (Critical first).</p>
+
+        <h3 style="color:#A855F7;text-decoration:underline;margin-top:25px;">References</h3>
+        {"".join(f'<a href="{ref}" style="color:#A855F7;display:block;margin:4px 0;">{ref}</a>' for ref in dict.fromkeys(all_refs))}
+
+        <hr style="border-color:rgba(124,58,237,0.2);margin:30px 0 15px 0;">
+        <p style="color:#666;font-size:12px;">Generated by AbuseCVE | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
+    </div>
+    </div>
+    """
+
+    return {"text": text_report.strip(), "html": html_report.strip()}
+
+
+async def generate_batch_ka(
+    session: AsyncSession,
+    cve_ids: List[str],
+    ai_provider: str = "auto",
+) -> dict:
+    """Generate a batch Knowledge Article for multiple CVEs.
+
+    Groups related CVEs into one consolidated report.
+    """
+    if not cve_ids:
+        return {"error": "No CVE IDs provided"}
+
+    # Look up all CVEs
+    result = await session.execute(select(CVE).where(CVE.cve_id.in_(cve_ids)))
+    cves = result.scalars().all()
+
+    if not cves:
+        return {"error": "No matching CVEs found in database"}
+
+    found_ids = {c.cve_id for c in cves}
+    missing = [cid for cid in cve_ids if cid not in found_ids]
+
+    cve_data_list = [c.to_dict() for c in cves]
+
+    # Sort by severity priority
+    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    cve_data_list.sort(key=lambda x: sev_order.get(x.get("severity", ""), 4))
+
+    # Try AI generation
+    ai_result = None
+    ai_error = None
+    ai_status = "not_attempted"
+
+    if ai_provider != "template":
+        try:
+            # Build batch prompt
+            cve_details = ""
+            per_cve_section = ""
+            for cve_data in cve_data_list:
+                cve_details += f"""
+- CVE ID: {cve_data.get('cve_id')}
+  Vendor: {cve_data.get('vendor', 'N/A')} | Product: {cve_data.get('product', 'N/A')}
+  Severity: {cve_data.get('severity', 'UNKNOWN')} (CVSS: {cve_data.get('cvss_score', 'N/A')})
+  KEV: {'Yes' if cve_data.get('kev_flag') else 'No'}
+  Description: {(cve_data.get('description', 'N/A'))[:200]}
+"""
+                per_cve_section += f"""**{cve_data.get('cve_id')}** — {cve_data.get('severity', 'N/A')} ({cve_data.get('cvss_score', 'N/A')})
+
+[Synopsis for this specific CVE]
+
+"""
+            vendors = sorted(set(d.get("vendor", "N/A") for d in cve_data_list))
+            prompt = BATCH_AI_PROMPT_TEMPLATE.format(
+                count=len(cve_data_list),
+                vendor=", ".join(vendors),
+                cve_details=cve_details,
+                per_cve_section=per_cve_section,
+            )
+
+            # Try AI providers
+            errors = []
+            if ai_provider in ("mistral", "auto"):
+                r = await _generate_with_mistral(prompt)
+                if r.status == "success" and r.content:
+                    ai_result = r
+                else:
+                    errors.append(r.error or "Mistral failed")
+
+            if not ai_result and ai_provider in ("gemini", "auto"):
+                r = await _generate_with_gemini(prompt)
+                if r.status == "success" and r.content:
+                    ai_result = r
+                else:
+                    errors.append(r.error or "Gemini failed")
+
+            if ai_result and ai_result.status == "success":
+                ai_status = "success"
+            else:
+                ai_error = "; ".join(errors)
+                ai_status = "api_error"
+        except Exception as e:
+            ai_error = str(e)
+            ai_status = "api_error"
+            logger.warning(f"Batch AI generation failed: {e}")
+
+    # Generate template report
+    template_report = _generate_batch_template(cve_data_list)
+
+    # Determine final content
+    if ai_result and ai_result.status == "success" and ai_result.content:
+        content = ai_result.content
+        generation_method = f"ai_{ai_result.provider_used or ai_provider}"
+    else:
+        content = template_report["text"]
+        generation_method = "template"
+        if ai_provider != "template":
+            ai_status = "fallback_to_template"
+
+    # Build title
+    vendors = sorted(set(d.get("vendor", "N/A") for d in cve_data_list))
+    vendor_str = ", ".join(vendors[:3])
+    if len(vendors) > 3:
+        vendor_str += f" +{len(vendors) - 3} more"
+    max_severity = cve_data_list[0].get("severity", "UNKNOWN") if cve_data_list else "UNKNOWN"
+    title = f"Batch Vulnerability Report — {vendor_str} ({len(cve_data_list)} CVEs, {max_severity})"
+
+    # Create the KA
+    ka = KnowledgeArticle(
+        title=title,
+        cve_ids=[d.get("cve_id") for d in cve_data_list],
+        content=content,
+        summary=template_report["text"][:500],
+        severity_assessment=max_severity,
+        affected_products=list(dict.fromkeys(
+            p for d in cve_data_list for p in (d.get("affected_products") or [])[:5]
+        ))[:20],
+        recommendations="Check each vendor advisory and upgrade to the latest patched versions.",
+        author=f"AbuseCVE ({generation_method})",
+        status="published",
+    )
+    session.add(ka)
+    await session.flush()
+
+    result_dict = ka.to_dict()
+    result_dict["html_content"] = template_report["html"]
+    result_dict["text_content"] = template_report["text"]
+    result_dict["generation_method"] = generation_method
+    result_dict["ai_status"] = ai_status
+    result_dict["cve_count"] = len(cve_data_list)
+    if missing:
+        result_dict["missing_cves"] = missing
+    if ai_error:
+        result_dict["ai_error"] = ai_error
 
     return result_dict

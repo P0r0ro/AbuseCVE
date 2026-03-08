@@ -72,7 +72,10 @@ export const getAlerts = (params = {}) => {
     });
     return request(`/alerts?${qs.toString()}`);
 };
-export const getAlertStats = () => request('/alerts/stats');
+export const getAlertStats = (period) => {
+    const qs = period ? `?period=${encodeURIComponent(period)}` : '';
+    return request(`/alerts/stats${qs}`);
+};
 
 // ── Knowledge Articles ───────────────────────
 export const getKAs = () => request('/knowledge-articles');
@@ -85,6 +88,12 @@ export const generateKA = (cveId, aiProvider = 'auto') =>
         method: 'POST',
         body: { ai_provider: aiProvider },
     });
+export const getAIStatus = () => request('/knowledge-articles/ai-status');
+export const generateBatchKA = (cveIds, aiProvider = 'auto') =>
+    request('/knowledge-articles/generate-batch', {
+        method: 'POST',
+        body: { cve_ids: cveIds, ai_provider: aiProvider },
+    });
 export const exportKA = async (kaId) => {
     const res = await requestRaw(`/knowledge-articles/${kaId}/export`);
     const blob = await res.blob();
@@ -92,6 +101,43 @@ export const exportKA = async (kaId) => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `KA_${kaId}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+};
+
+// ── Export ───────────────────────────────────
+export const exportCVEsExcel = async (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== '' && v !== null && v !== false) qs.set(k, v);
+    });
+    const res = await requestRaw(`/export/cves?${qs.toString()}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename=(.+)/);
+    const filename = match ? match[1] : 'AbuseCVE_CVEs.xlsx';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+};
+
+export const exportAlertsExcel = async (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== '' && v !== null && v !== false) qs.set(k, v);
+    });
+    const res = await requestRaw(`/export/alerts?${qs.toString()}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename=(.+)/);
+    const filename = match ? match[1] : 'AbuseCVE_Alerts.xlsx';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
 };

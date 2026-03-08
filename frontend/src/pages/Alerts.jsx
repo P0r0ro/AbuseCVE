@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getAlerts, getAlertStats, getCVE } from '../api';
+import { getAlerts, getAlertStats, getCVE, exportAlertsExcel } from '../api';
 
 const STATUS_COLORS = {
     sent: 'var(--success)',
@@ -7,14 +7,6 @@ const STATUS_COLORS = {
     stored: 'var(--text-muted)',
     unknown: 'var(--text-muted)',
 };
-
-const PERIOD_OPTIONS = [
-    { value: '', label: 'All Time' },
-    { value: 'today', label: 'Today' },
-    { value: 'week', label: 'This Week' },
-    { value: 'month', label: 'This Month' },
-    { value: 'year', label: 'This Year' },
-];
 
 const STATUS_OPTIONS = [
     { value: '', label: 'All Statuses' },
@@ -29,6 +21,34 @@ const ISNEW_OPTIONS = [
     { value: 'false', label: '🔄 Duplicate CVEs only' },
 ];
 
+const QUICK_PERIODS = [
+    { value: '1d', label: 'Today' },
+    { value: '7d', label: 'Last 7d' },
+    { value: '30d', label: 'Last 30d' },
+    { value: '90d', label: 'Last 90d' },
+];
+
+const UNIT_OPTIONS = [
+    { value: 'd', label: 'Days' },
+    { value: 'w', label: 'Weeks' },
+    { value: 'm', label: 'Months' },
+    { value: 'y', label: 'Years' },
+];
+
+function periodLabel(period) {
+    if (!period) return 'All Time';
+    if (period === '1d' || period === 'today') return 'Today';
+    const match = period.match(/^(\d+)([dwmy])$/);
+    if (match) {
+        const n = match[1];
+        const unitMap = { d: 'Day', w: 'Week', m: 'Month', y: 'Year' };
+        const unit = unitMap[match[2]] || match[2];
+        return `Last ${n} ${unit}${n > 1 ? 's' : ''}`;
+    }
+    const legacy = { week: 'Last 7 Days', month: 'Last 30 Days', year: 'Last Year' };
+    return legacy[period] || period;
+}
+
 export default function Alerts() {
     const [alerts, setAlerts] = useState([]);
     const [stats, setStats] = useState({});
@@ -39,9 +59,13 @@ export default function Alerts() {
     const [expandedCve, setExpandedCve] = useState(null);
     const [cveDetail, setCveDetail] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
+    const [showExportMenu, setShowExportMenu] = useState(false);
+    const [exporting, setExporting] = useState(false);
 
     // Filters
-    const [period, setPeriod] = useState('');
+    const [period, setPeriod] = useState('1d');
+    const [customNum, setCustomNum] = useState('');
+    const [customUnit, setCustomUnit] = useState('d');
     const [status, setStatus] = useState('');
     const [isNew, setIsNew] = useState('');
     const [pql, setPql] = useState('');
@@ -64,36 +88,35 @@ export default function Alerts() {
         try {
             const [data, s] = await Promise.all([
                 getAlerts(buildParams()),
-                getAlertStats(),
+                getAlertStats(period),
             ]);
             setAlerts(data.items || []);
             setTotal(data.total || 0);
             setStats(s);
-            // Reset page if total changed (new alerts arrived)
             if (prevTotalRef.current !== null && s.total !== prevTotalRef.current && page !== 1) {
                 setPage(1);
             }
             prevTotalRef.current = s.total;
         } catch (e) { console.error(e); }
         finally { setLoading(false); setRefreshing(false); }
-    }, [buildParams, page]);
+    }, [buildParams, page, period]);
 
     // Initial load + filter changes
     useEffect(() => { setPage(1); }, [period, status, isNew, pql]);
     useEffect(() => { fetchAlerts(); }, [page, period, status, isNew, pql]);
 
-    // Auto-refresh every 30s (lightweight stats poll, full refresh if count changed)
+    // Auto-refresh every 30s
     useEffect(() => {
         pollRef.current = setInterval(async () => {
             try {
-                const s = await getAlertStats();
+                const s = await getAlertStats(period);
                 if (s.total !== prevTotalRef.current) {
                     fetchAlerts(true);
                 }
             } catch { /* silent */ }
         }, 30_000);
         return () => clearInterval(pollRef.current);
-    }, [fetchAlerts]);
+    }, [fetchAlerts, period]);
 
     const handlePqlSearch = (e) => {
         e.preventDefault();
@@ -109,7 +132,34 @@ export default function Alerts() {
         finally { setLoadingDetail(false); }
     };
 
+    const handleCustomPeriod = () => {
+        const n = parseInt(customNum);
+        if (n > 0 && customUnit) {
+            setPeriod(`${n}${customUnit}`);
+        }
+    };
+
+    const handleExport = async (mode) => {
+        setExporting(true);
+        setShowExportMenu(false);
+        try {
+            const p = { mode };
+            if (mode === 'filtered') {
+                if (period) p.period = period;
+                if (status) p.status = status;
+                if (pql) p.pql = pql;
+                if (isNew !== '') p.is_new = isNew;
+            }
+            await exportAlertsExcel(p);
+        } catch (e) {
+            alert('Export failed: ' + e.message);
+        } finally {
+            setExporting(false);
+        }
+    };
+
     const totalPages = Math.ceil(total / 30);
+    const currentPeriodLabel = periodLabel(period);
 
     const filterStyle = {
         display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center',
@@ -130,47 +180,129 @@ export default function Alerts() {
                     <h1 className="header-title">Alerts</h1>
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>CVE alert history, notifications, and scan results</p>
                 </div>
-                <button className="btn btn-secondary" onClick={() => fetchAlerts(true)} disabled={refreshing}>
-                    {refreshing ? '↻ Refreshing...' : '↻ Refresh'}
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ position: 'relative' }}>
+                        <button className="btn btn-secondary" onClick={() => setShowExportMenu(!showExportMenu)} disabled={exporting}>
+                            {exporting ? '...Exporting' : '📥 Export Excel'}
+                        </button>
+                        {showExportMenu && (
+                            <div style={{
+                                position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 100,
+                                background: 'var(--card-bg)', border: '1px solid var(--border)',
+                                borderRadius: 8, padding: 4, minWidth: 180, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                            }}>
+                                <button style={{
+                                    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                                    background: 'none', border: 'none', color: 'var(--text-primary)',
+                                    cursor: 'pointer', borderRadius: 6, fontSize: 13,
+                                }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
+                                   onMouseOut={e => e.target.style.background = 'none'}
+                                   onClick={() => handleExport('filtered')}>
+                                    📋 Export Filtered
+                                </button>
+                                <button style={{
+                                    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                                    background: 'none', border: 'none', color: 'var(--text-primary)',
+                                    cursor: 'pointer', borderRadius: 6, fontSize: 13,
+                                }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
+                                   onMouseOut={e => e.target.style.background = 'none'}
+                                   onClick={() => handleExport('all')}>
+                                    📦 Export All
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    <button className="btn btn-secondary" onClick={() => fetchAlerts(true)} disabled={refreshing}>
+                        {refreshing ? '↻ Refreshing...' : '↻ Refresh'}
+                    </button>
+                </div>
             </div>
 
-            {/* Stats — 5 cards */}
+            {/* Time Filter — Wazuh-style */}
+            <div style={{
+                display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
+                marginBottom: 16, padding: '10px 16px',
+                background: 'rgba(124,58,237,0.04)', border: '1px solid rgba(124,58,237,0.15)',
+                borderRadius: 10,
+            }}>
+                <span className="text-sm text-muted" style={{ marginRight: 4 }}>Time Range:</span>
+                {/* Quick presets */}
+                {QUICK_PERIODS.map(qp => (
+                    <button key={qp.value}
+                        className={period === qp.value ? 'btn btn-primary' : 'btn btn-secondary'}
+                        style={{ padding: '4px 12px', fontSize: 12 }}
+                        onClick={() => { setPeriod(qp.value); setCustomNum(''); }}>
+                        {qp.label}
+                    </button>
+                ))}
+                <span className="text-sm text-muted" style={{ margin: '0 4px' }}>|</span>
+                {/* Custom: number + unit */}
+                <input
+                    type="number" min="1" max="999" placeholder="#"
+                    value={customNum}
+                    onChange={e => setCustomNum(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleCustomPeriod(); }}
+                    style={{
+                        width: 50, padding: '4px 8px', fontSize: 13, textAlign: 'center',
+                        background: 'var(--card-bg)', border: '1px solid var(--border)',
+                        color: 'var(--text-primary)', borderRadius: 6,
+                    }}
+                />
+                <select value={customUnit} onChange={e => setCustomUnit(e.target.value)} style={selectStyle}>
+                    {UNIT_OPTIONS.map(u => (
+                        <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                </select>
+                <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
+                    onClick={handleCustomPeriod} disabled={!customNum}>
+                    Apply
+                </button>
+                {period && (
+                    <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }}
+                        onClick={() => { setPeriod(''); setCustomNum(''); }}>
+                        ✕ All Time
+                    </button>
+                )}
+                <span className="text-xs text-muted" style={{ marginLeft: 'auto' }}>
+                    Showing: {currentPeriodLabel}
+                </span>
+            </div>
+
+            {/* Stats — 5 cards (period-scoped) */}
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: 24 }}>
                 <div className="stat-card">
                     <div className="stat-icon">📨</div>
                     <div className="stat-value">{stats.total || 0}</div>
                     <div className="stat-label">Total Alerts</div>
+                    <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
                     <div className="stat-icon">✅</div>
                     <div className="stat-value" style={{ color: 'var(--success)' }}>{stats.sent || 0}</div>
                     <div className="stat-label">Sent</div>
+                    <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
                     <div className="stat-icon">❌</div>
                     <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.failed || 0}</div>
                     <div className="stat-label">Failed</div>
+                    <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
                     <div className="stat-icon">🆕</div>
                     <div className="stat-value" style={{ color: 'var(--purple-400)' }}>{stats.new_cve_alerts || 0}</div>
                     <div className="stat-label">New CVE Alerts</div>
+                    <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
                     <div className="stat-icon">📅</div>
-                    <div className="stat-value">{stats.sent_today || 0}</div>
-                    <div className="stat-label">Sent Today</div>
+                    <div className="stat-value">{stats.sent_in_period || 0}</div>
+                    <div className="stat-label">Sent ({currentPeriodLabel})</div>
                 </div>
             </div>
 
             {/* Filter Bar */}
             <div style={filterStyle}>
-                {/* Period */}
-                <select value={period} onChange={e => setPeriod(e.target.value)} style={selectStyle}>
-                    {PERIOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-
                 {/* Status */}
                 <select value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
                     {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -186,7 +318,7 @@ export default function Alerts() {
                     <input
                         className="form-input"
                         style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
-                        placeholder="Search CVE ID or rule name…"
+                        placeholder="Search CVE ID or rule name..."
                         value={pqlInput}
                         onChange={e => { setPqlInput(e.target.value); if (!e.target.value) setPql(''); }}
                     />
@@ -196,10 +328,10 @@ export default function Alerts() {
                 </form>
 
                 {/* Reset */}
-                {(period || status || isNew || pql) && (
+                {(status || isNew || pql) && (
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 12px' }}
-                        onClick={() => { setPeriod(''); setStatus(''); setIsNew(''); setPql(''); setPqlInput(''); }}>
-                        ✕ Reset
+                        onClick={() => { setStatus(''); setIsNew(''); setPql(''); setPqlInput(''); }}>
+                        ✕ Reset Filters
                     </button>
                 )}
             </div>
@@ -209,7 +341,7 @@ export default function Alerts() {
                 <div className="card-header">
                     <div className="card-title">
                         Alert History ({total.toLocaleString()})
-                        {(period || status || isNew || pql) && (
+                        {(status || isNew || pql) && (
                             <span className="text-xs text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>— filtered</span>
                         )}
                     </div>
@@ -237,13 +369,10 @@ export default function Alerts() {
                                     <React.Fragment key={a.id}>
                                         <tr style={{ cursor: 'pointer' }}
                                             className={expandedCve === a.cve_id ? 'row-expanded' : ''}>
-                                            {/* CVE ID — clickable */}
                                             <td className="text-mono" style={{ color: 'var(--purple-400)' }}
                                                 onClick={() => handleCveClick(a.cve_id)}>
                                                 {a.cve_id}
                                             </td>
-
-                                            {/* Status badge */}
                                             <td>
                                                 <span style={{
                                                     fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600,
@@ -255,8 +384,6 @@ export default function Alerts() {
                                                             a.status === 'stored' ? '📦 stored' : a.status}
                                                 </span>
                                             </td>
-
-                                            {/* New vs duplicate */}
                                             <td>
                                                 {a.is_new_cve === true ? (
                                                     <span style={{ fontSize: 11, color: 'var(--purple-400)', fontWeight: 600 }}>🆕 new</span>
@@ -266,12 +393,9 @@ export default function Alerts() {
                                                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                                                 )}
                                             </td>
-
-                                            {/* Rule */}
                                             <td className="text-sm text-muted">
                                                 {a.rule_name || '—'}
                                             </td>
-
                                             <td className="text-sm text-muted">
                                                 {a.sent_at ? new Date(a.sent_at).toLocaleString() : '—'}
                                             </td>
@@ -280,7 +404,6 @@ export default function Alerts() {
                                                 {a.error_message || '—'}
                                             </td>
                                         </tr>
-                                        {/* CVE detail expand */}
                                         {expandedCve === a.cve_id && (
                                             <tr>
                                                 <td colSpan="7" style={{ padding: 0, border: 'none' }}>
@@ -313,7 +436,7 @@ export default function Alerts() {
                                 ))}
                                 {alerts.length === 0 && (
                                     <tr><td colSpan="7" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
-                                        {(period || status || isNew || pql) ? 'No alerts match the current filters.' : 'No alerts sent yet.'}
+                                        {(status || isNew || pql) ? 'No alerts match the current filters.' : `No alerts for ${currentPeriodLabel.toLowerCase()}.`}
                                     </td></tr>
                                 )}
                             </tbody>

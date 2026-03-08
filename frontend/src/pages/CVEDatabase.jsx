@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCVEs, generateKA, searchCVEsByPQL, getQueryHelp } from '../api';
+import { getCVEs, generateKA, searchCVEsByPQL, getQueryHelp, exportCVEsExcel } from '../api';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -23,6 +23,8 @@ export default function CVEDatabase() {
     const [pqlQuery, setPqlQuery] = useState('');
     const [showHelp, setShowHelp] = useState(false);
     const [queryHelp, setQueryHelp] = useState(null);
+    const [showExportMenu, setShowExportMenu] = useState(false);
+    const [exporting, setExporting] = useState(false);
 
     const fetchData = async () => {
         setLoading(true);
@@ -49,11 +51,68 @@ export default function CVEDatabase() {
         }
     };
 
+    const handleExport = async (mode) => {
+        setExporting(true);
+        setShowExportMenu(false);
+        try {
+            const p = { mode };
+            if (mode === 'filtered') {
+                if (params.severity) p.severity = params.severity;
+                if (params.vendor) p.vendor = params.vendor;
+                if (params.product) p.product = params.product;
+                if (params.source) p.source = params.source;
+                if (params.search) p.search = params.search;
+                if (params.kev_only) p.kev_only = true;
+                if (params.sort_by) p.sort_by = params.sort_by;
+                if (params.sort_order) p.sort_order = params.sort_order;
+                if (pqlQuery) p.pql = pqlQuery;
+            }
+            await exportCVEsExcel(p);
+        } catch (e) {
+            alert('Export failed: ' + e.message);
+        } finally {
+            setExporting(false);
+        }
+    };
+
     return (
         <div className="main-content animate-in">
-            <div style={{ marginBottom: 24 }}>
-                <h1 className="header-title">CVE Database</h1>
-                <p className="text-sm text-muted" style={{ marginTop: 4 }}>Search and browse stored CVEs from all sources</p>
+            <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                    <h1 className="header-title">CVE Database</h1>
+                    <p className="text-sm text-muted" style={{ marginTop: 4 }}>Search and browse stored CVEs from all sources</p>
+                </div>
+                <div style={{ position: 'relative' }}>
+                    <button className="btn btn-secondary" onClick={() => setShowExportMenu(!showExportMenu)} disabled={exporting}>
+                        {exporting ? '...Exporting' : '📥 Export Excel'}
+                    </button>
+                    {showExportMenu && (
+                        <div style={{
+                            position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 100,
+                            background: 'var(--card-bg)', border: '1px solid var(--border)',
+                            borderRadius: 8, padding: 4, minWidth: 180, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                        }}>
+                            <button style={{
+                                display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                                background: 'none', border: 'none', color: 'var(--text-primary)',
+                                cursor: 'pointer', borderRadius: 6, fontSize: 13,
+                            }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
+                               onMouseOut={e => e.target.style.background = 'none'}
+                               onClick={() => handleExport('filtered')}>
+                                📋 Export Filtered
+                            </button>
+                            <button style={{
+                                display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                                background: 'none', border: 'none', color: 'var(--text-primary)',
+                                cursor: 'pointer', borderRadius: 6, fontSize: 13,
+                            }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
+                               onMouseOut={e => e.target.style.background = 'none'}
+                               onClick={() => handleExport('all')}>
+                                📦 Export All
+                            </button>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {genStatus && (

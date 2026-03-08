@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.knowledge_article import KnowledgeArticle
-from app.services.ka_service import create_knowledge_article, generate_ka_for_cve
+from app.services.ka_service import create_knowledge_article, generate_ka_for_cve, generate_batch_ka, check_ai_keys_status
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,17 @@ class KAUpdate(BaseModel):
 
 class GenerateKARequest(BaseModel):
     ai_provider: Optional[str] = "auto"  # "mistral", "gemini", "template", "auto"
+
+
+class BatchGenerateKARequest(BaseModel):
+    cve_ids: List[str]
+    ai_provider: Optional[str] = "auto"
+
+
+@router.get("/ai-status")
+async def ai_status():
+    """Check which AI providers have API keys configured."""
+    return check_ai_keys_status()
 
 
 @router.get("")
@@ -98,6 +109,37 @@ async def generate_ka(
     except Exception as e:
         logger.error(f"KA generation failed for {cve_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+
+@router.post("/generate-batch", status_code=201)
+async def generate_batch(
+    data: BatchGenerateKARequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a batch Knowledge Article for multiple CVEs.
+
+    Useful for vendor batch releases (e.g., Cisco semi-annual patches).
+    Groups related CVEs into one consolidated report.
+    """
+    if not data.cve_ids:
+        raise HTTPException(status_code=400, detail="No CVE IDs provided")
+    if len(data.cve_ids) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 CVEs per batch")
+
+    try:
+        result = await generate_batch_ka(
+            session=db,
+            cve_ids=data.cve_ids,
+            ai_provider=data.ai_provider or "auto",
+        )
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch KA generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch generation failed: {str(e)}")
 
 
 @router.put("/{ka_id}")

@@ -62,6 +62,7 @@ from app.api.routes_test import router as test_router
 from app.api.routes_health import router as health_router
 from app.api.routes_logs import router as logs_router
 from app.api.routes_integrations import router as integrations_router
+from app.api.routes_export import router as export_router
 
 app.include_router(dashboard_router)
 app.include_router(filters_router)
@@ -72,6 +73,7 @@ app.include_router(test_router)
 app.include_router(health_router)
 app.include_router(logs_router)
 app.include_router(integrations_router)
+app.include_router(export_router)
 
 
 @app.get("/api/health")
