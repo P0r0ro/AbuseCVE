@@ -370,8 +370,7 @@ async def pql_search(
 
 @router.post("/backfill-vendor-product")
 async def backfill_vendor_product(
-    batch_size: int = Query(1000, ge=100, le=5000),
-    db: AsyncSession = Depends(get_db),
+    batch_size: int = Query(500, ge=100, le=2000),
 ):
     """Backfill missing vendor/product fields for existing CVEs.
 
@@ -380,98 +379,121 @@ async def backfill_vendor_product(
     - Description text parsing (pattern-based)
     - sourceIdentifier CNA email → vendor mapping
     - Rejected CVEs are marked as [rejected]
+
+    Uses its own DB sessions per batch to avoid memory/timeout issues.
     """
     from app.engine.vendor_product_extractor import extract_vendor_product
+    from app.database import async_session
+    from sqlalchemy import text
 
     # Count how many need backfill
-    count_result = await db.execute(
-        select(func.count()).select_from(
-            select(CVE.id).where(
-                or_(CVE.vendor.is_(None), CVE.product.is_(None))
-            ).subquery()
-        )
-    )
-    total_missing = count_result.scalar() or 0
+    async with async_session() as session:
+        total_missing = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(
+                    or_(CVE.vendor.is_(None), CVE.product.is_(None))
+                ).subquery()
+            )
+        )).scalar() or 0
 
     if total_missing == 0:
         return {"status": "ok", "message": "All CVEs already have vendor/product", "updated": 0}
 
-    # Process using ID-based pagination (avoids infinite loops on un-updatable rows)
+    # Process using ID-based cursor with fresh session per batch
     updated_count = 0
     processed_count = 0
     last_id = 0
 
     while True:
-        result = await db.execute(
-            select(CVE)
-            .where(
-                and_(
-                    CVE.id > last_id,
-                    or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+        async with async_session() as session:
+            try:
+                # Only select needed columns to reduce memory (raw_json can be large)
+                result = await session.execute(
+                    select(
+                        CVE.id, CVE.vendor, CVE.product, CVE.cpe_names,
+                        CVE.affected_products, CVE.raw_json, CVE.source,
+                        CVE.sources, CVE.description,
+                    )
+                    .where(
+                        and_(
+                            CVE.id > last_id,
+                            or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                        )
+                    )
+                    .order_by(asc(CVE.id))
+                    .limit(batch_size)
                 )
-            )
-            .order_by(asc(CVE.id))
-            .limit(batch_size)
-        )
-        cves = result.scalars().all()
-        if not cves:
-            break
+                rows = result.all()
+                if not rows:
+                    break
 
-        batch_updated = 0
-        for cve in cves:
-            last_id = cve.id
-            processed_count += 1
+                batch_updated = 0
+                for row in rows:
+                    cve_id, cur_vendor, cur_product = row[0], row[1], row[2]
+                    cpe_names, affected_prods, raw_json = row[3], row[4], row[5]
+                    source, sources, description = row[6], row[7], row[8]
 
-            new_vendor, new_product = extract_vendor_product(
-                vendor=cve.vendor,
-                product=cve.product,
-                cpe_names=cve.cpe_names,
-                affected_products=cve.affected_products,
-                raw_json=cve.raw_json,
-                source=cve.source,
-                sources=cve.sources,
-                description=cve.description,
-            )
+                    last_id = cve_id
+                    processed_count += 1
 
-            updates = {}
-            if new_vendor and not cve.vendor:
-                updates["vendor"] = new_vendor
-            if new_product and not cve.product:
-                updates["product"] = new_product
+                    new_vendor, new_product = extract_vendor_product(
+                        vendor=cur_vendor,
+                        product=cur_product,
+                        cpe_names=cpe_names,
+                        affected_products=affected_prods,
+                        raw_json=raw_json,
+                        source=source,
+                        sources=sources,
+                        description=description,
+                    )
 
-            if updates:
-                await db.execute(
-                    update(CVE).where(CVE.id == cve.id).values(**updates)
+                    updates = {}
+                    if new_vendor and not cur_vendor:
+                        updates["vendor"] = new_vendor
+                    if new_product and not cur_product:
+                        updates["product"] = new_product
+
+                    if updates:
+                        await session.execute(
+                            update(CVE).where(CVE.id == cve_id).values(**updates)
+                        )
+                        batch_updated += 1
+
+                await session.commit()
+                updated_count += batch_updated
+                logger.info(
+                    f"Vendor/product backfill: {updated_count} updated, "
+                    f"{processed_count}/{total_missing} processed"
                 )
-                batch_updated += 1
 
-        await db.commit()
-        updated_count += batch_updated
-        logger.info(
-            f"Vendor/product backfill: {updated_count} updated, "
-            f"{processed_count}/{total_missing} processed"
-        )
+            except Exception as e:
+                logger.error(f"Backfill batch error at id>{last_id}: {e}")
+                await session.rollback()
+                # Skip this batch and continue from next ID
+                last_id += batch_size
+                continue
 
-    # Final counts
-    remaining_both = (await db.execute(
-        select(func.count()).select_from(
-            select(CVE.id).where(
-                and_(CVE.vendor.is_(None), CVE.product.is_(None))
-            ).subquery()
-        )
-    )).scalar() or 0
+    # Final counts with fresh session
+    async with async_session() as session:
+        remaining_both = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(
+                    and_(CVE.vendor.is_(None), CVE.product.is_(None))
+                ).subquery()
+            )
+        )).scalar() or 0
 
-    remaining_vendor = (await db.execute(
-        select(func.count()).select_from(
-            select(CVE.id).where(CVE.vendor.is_(None)).subquery()
-        )
-    )).scalar() or 0
+        remaining_vendor = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(CVE.vendor.is_(None)).subquery()
+            )
+        )).scalar() or 0
 
-    remaining_product = (await db.execute(
-        select(func.count()).select_from(
-            select(CVE.id).where(CVE.product.is_(None)).subquery()
-        )
-    )).scalar() or 0
+        remaining_product = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(CVE.product.is_(None)).subquery()
+            )
+        )).scalar() or 0
 
     return {
         "status": "ok",
