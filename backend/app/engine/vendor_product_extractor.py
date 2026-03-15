@@ -2,6 +2,13 @@
 
 Extracts vendor and product from multiple data sources within a CVE record,
 used both during ingestion and for backfilling existing records.
+
+Extraction priority:
+1. CPE names (most reliable — structured data)
+2. Affected products list
+3. Source-specific raw_json parsing
+4. Description text parsing (pattern-based)
+5. sourceIdentifier (CNA email domain mapping)
 """
 
 from __future__ import annotations
@@ -11,6 +18,79 @@ import re
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# ── CNA email → vendor mapping ──────────────────────────────────────────────
+# Maps sourceIdentifier email domains to known vendors.
+# Only includes CNAs that report their OWN products (not third-party reporters).
+CNA_VENDOR_MAP = {
+    "asustor.com": "asustor",
+    "apple.com": "apple",
+    "cisco.com": "cisco",
+    "dell.com": "dell",
+    "f5.com": "f5",
+    "fortinet.com": "fortinet",
+    "huawei.com": "huawei",
+    "ibm.com": "ibm",
+    "intel.com": "intel",
+    "juniper.net": "juniper",
+    "lenovo.com": "lenovo",
+    "microsoft.com": "microsoft",
+    "mozilla.org": "mozilla",
+    "oracle.com": "oracle",
+    "paloaltonetworks.com": "paloaltonetworks",
+    "qualcomm.com": "qualcomm",
+    "redhat.com": "redhat",
+    "sap.com": "sap",
+    "samsung.com": "samsung",
+    "siemens.com": "siemens",
+    "sophos.com": "sophos",
+    "suse.com": "suse",
+    "synology.com": "synology",
+    "trendmicro.com": "trendmicro",
+    "vmware.com": "vmware",
+    "zoom.us": "zoom",
+    "zyxel.com.tw": "zyxel",
+    "apache.org": "apache",
+    "jenkins.io": "jenkins",
+    "drupal.org": "drupal",
+    "gitlab.com": "gitlab",
+    "hashicorp.com": "hashicorp",
+    "elastic.co": "elastic",
+    "mongodb.com": "mongodb",
+    "netapp.com": "netapp",
+    "schneider-electric.com": "schneider-electric",
+    "bosch.com": "bosch",
+    "abb.com": "abb",
+    "hp.com": "hp",
+    "hpe.com": "hpe",
+    "adobe.com": "adobe",
+    "atlassian.com": "atlassian",
+    "autodesk.com": "autodesk",
+    "trellix.com": "trellix",
+    "ivanti.com": "ivanti",
+    "nvidia.com": "nvidia",
+    "qnap.com": "qnap",
+    "tp-link.com": "tp-link",
+    "dlink.com": "d-link",
+    "google.com": "google",
+    "chromium.org": "google",
+    "arm.com": "arm",
+    "mattermost.com": "mattermost",
+    "progress.com": "progress",
+    "splunk.com": "splunk",
+    "zscaler.com": "zscaler",
+    "veritas.com": "veritas",
+    "withsecure.com": "withsecure",
+    "rockwellautomation.com": "rockwell_automation",
+}
+
+# CNAs that are third-party reporters — sourceIdentifier tells us the ecosystem, not the vendor
+CNA_ECOSYSTEM_MAP = {
+    "wordfence.com": "wordpress",
+    "patchstack.com": "wordpress",
+    "wpscan.com": "wordpress",
+}
 
 
 def extract_from_cpe(cpe_string: str) -> Tuple[Optional[str], Optional[str]]:
@@ -57,11 +137,7 @@ def extract_from_affected_products(affected_products: list) -> Tuple[Optional[st
 
 
 def extract_from_redhat_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str]]:
-    """Extract product from RedHat raw_json data.
-
-    RedHat stores affected packages like 'python39-3.9.18-3.el8_10' or
-    product names in affected_release entries.
-    """
+    """Extract product from RedHat raw_json data."""
     if not raw_json:
         return "redhat", None
 
@@ -74,13 +150,11 @@ def extract_from_redhat_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str
                 if product_name:
                     return "redhat", product_name.lower()
 
-    # Try affected_packages for package names (less ideal but better than nothing)
+    # Try affected_packages for package names
     packages = raw_json.get("affected_packages", [])
     if isinstance(packages, list) and packages:
         pkg = packages[0]
         if isinstance(pkg, str):
-            # Strip version info: "package-name-1.2.3-1.el8" -> "package-name"
-            # RPM names use last two hyphens for version-release
             match = re.match(r'^([a-zA-Z][a-zA-Z0-9_+-]*?)(?:-\d)', pkg)
             if match:
                 return "redhat", match.group(1).lower()
@@ -88,7 +162,6 @@ def extract_from_redhat_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str
     # Try bugzilla_description
     bugzilla_desc = raw_json.get("bugzilla_description", "")
     if bugzilla_desc:
-        # Pattern: "CVE-YYYY-NNNNN product_name: description"
         match = re.match(r'CVE-\d{4}-\d+\s+(.+?):\s', bugzilla_desc)
         if match:
             return "redhat", match.group(1).strip().lower()
@@ -97,15 +170,11 @@ def extract_from_redhat_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str
 
 
 def extract_from_nvd_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str]]:
-    """Try to extract vendor/product from NVD raw_json when CPE configs are missing.
-
-    Parses the configurations block that may have been missed, and falls back
-    to description-based extraction.
-    """
+    """Try to extract vendor/product from NVD raw_json when CPE configs are missing."""
     if not raw_json:
         return None, None
 
-    # Try configurations block (in case parsing was incomplete)
+    # Try configurations block
     configurations = raw_json.get("configurations", [])
     for config in configurations:
         for node in config.get("nodes", []):
@@ -136,6 +205,186 @@ def extract_from_mitre_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str]
     return None, None
 
 
+def extract_from_description(description: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extract vendor/product from CVE description text using common patterns.
+
+    NVD descriptions follow predictable patterns. This handles the most common ones
+    found in CVEs that are "Awaiting Analysis" (no CPE data yet).
+    """
+    if not description:
+        return None, None
+
+    desc = description.strip()
+
+    # ── Rejected CVEs ────────────────────────────────────────────────────────
+    if desc.startswith("Rejected reason:") or "DO NOT USE THIS CANDIDATE NUMBER" in desc:
+        return "[rejected]", "[rejected]"
+
+    # ── WordPress plugin pattern (very common — Wordfence/Patchstack) ────────
+    # "The {Product} plugin for WordPress is vulnerable to..."
+    m = re.match(
+        r'The\s+(.+?)\s+plugin\s+for\s+WordPress\s+is\s+vulnerable\s+to',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        return "wordpress", m.group(1).strip().lower()
+
+    # "The {Product} plugin for WordPress..."  (broader)
+    m = re.match(
+        r'The\s+(.+?)\s+plugin\s+for\s+WordPress\b',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        return "wordpress", m.group(1).strip().lower()
+
+    # "The {Product} theme for WordPress..."
+    m = re.match(
+        r'The\s+(.+?)\s+theme\s+for\s+WordPress\b',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        return "wordpress", m.group(1).strip().lower()
+
+    # ── Patchstack style: "...vulnerability in {Vendor} {Product} allows..." ─
+    # "...vulnerability in {Product} allows {Attack}. This issue affects {Product}:"
+    m = re.search(
+        r'This issue affects\s+(.+?):\s+from',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        # Try to split "Vendor Product" if there are multiple words
+        return None, product_name.lower()
+
+    # ── "A vulnerability in {Product} of/from {Vendor}" ─────────────────────
+    m = re.match(
+        r'(?:A|An)\s+.{0,80}?vulnerability\s+(?:in|of)\s+(?:the\s+)?(.+?)\s+(?:of|from|by)\s+(.+?)[\s,.]',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip().lower()
+        vendor_name = m.group(2).strip().rstrip('.').lower()
+        if len(vendor_name) < 50 and len(product_name) < 80:
+            return vendor_name, product_name
+
+    # ── "{Product} before {version}" ────────────────────────────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._-]{1,50}?)\s+before\s+(?:version\s+)?[\d.]+',
+        desc,
+    )
+    if m:
+        return None, m.group(1).strip().lower()
+
+    # ── "An issue was discovered in {Product} {version}" ────────────────────
+    m = re.match(
+        r'An\s+issue\s+(?:was|has been)\s+discovered\s+in\s+(.+?)\s+[\d.]+',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        if len(product_name) < 80:
+            return None, product_name.lower()
+
+    # ── "...was found in the {Product} of {Vendor}" ─────────────────────────
+    m = re.search(
+        r'was\s+found\s+in\s+(?:the\s+)?(.+?)\s+of\s+(.+?)[\s,.]',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip().lower()
+        vendor_name = m.group(2).strip().rstrip('.').lower()
+        if len(vendor_name) < 50 and len(product_name) < 80:
+            return vendor_name, product_name
+
+    # ── "{Vendor} {Product} {version} has/contains/allows" ──────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z]+)\s+([A-Z][A-Za-z0-9._-]+)\s+[\d.]+.*?\s+(?:has|contains|allows|is vulnerable)',
+        desc,
+    )
+    if m:
+        return m.group(1).strip().lower(), m.group(2).strip().lower()
+
+    # ── "The {Product} for {Platform} app before {version}" ─────────────────
+    m = re.match(
+        r'The\s+(.+?)\s+(?:for|app\s+for)\s+(.+?)\s+(?:app\s+)?(?:before|through|up to)',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        return None, m.group(1).strip().lower()
+
+    # ── "A/An ... vulnerability in {Product} allows/that/which" ────────────
+    m = re.match(
+        r'(?:A|An)\s+.{0,80}?vulnerability\s+in\s+(?:the\s+)?(.+?)\s+(?:allows|that|which|could|enables|makes)',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        if len(product_name) < 80 and not product_name[0].islower():
+            return None, product_name.lower()
+
+    # ── "In {Product}, ..." or "In {Vendor} {Product}, ..." ────────────────
+    m = re.match(
+        r'^In\s+([A-Z][A-Za-z0-9\s._-]{1,60}?),\s',
+        desc,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        if len(product_name) < 60:
+            return None, product_name.lower()
+
+    # ── "{Product} {version} and earlier/prior" ─────────────────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._-]{1,50}?)\s+[\d.]+\s+(?:and\s+)?(?:earlier|prior)',
+        desc,
+    )
+    if m:
+        return None, m.group(1).strip().lower()
+
+    # ── "A flaw was found in {Product}" ─────────────────────────────────────
+    m = re.search(
+        r'(?:A\s+)?flaw\s+was\s+found\s+in\s+(?:the\s+)?(.+?)[\s,.](?:that|which|where|allowing|\s+A\s)',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        if len(product_name) < 80:
+            return None, product_name.lower()
+
+    # ── "Missing Authorization vulnerability in {Product} allows" ───────────
+    m = re.search(
+        r'vulnerability\s+in\s+(.+?)\s+allows\s',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = m.group(1).strip()
+        if len(product_name) < 80:
+            return None, product_name.lower()
+
+    return None, None
+
+
+def extract_from_source_identifier(source_identifier: str) -> Tuple[Optional[str], Optional[str]]:
+    """Map NVD sourceIdentifier (CNA email) to vendor.
+
+    Only maps CNAs that report their own products.
+    Third-party reporters (Wordfence, Patchstack) return ecosystem hint instead.
+    """
+    if not source_identifier or "@" not in source_identifier:
+        return None, None
+
+    domain = source_identifier.split("@", 1)[1].lower()
+
+    # Direct vendor match — CNA reports their own products
+    if domain in CNA_VENDOR_MAP:
+        return CNA_VENDOR_MAP[domain], None
+
+    # Ecosystem hint — helps narrow down but not definitive vendor
+    if domain in CNA_ECOSYSTEM_MAP:
+        return CNA_ECOSYSTEM_MAP[domain], None
+
+    return None, None
+
+
 def extract_vendor_product(
     vendor: Optional[str],
     product: Optional[str],
@@ -144,6 +393,7 @@ def extract_vendor_product(
     raw_json: dict = None,
     source: str = None,
     sources: list = None,
+    description: str = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Master extraction function — tries every available avenue.
 
@@ -154,13 +404,16 @@ def extract_vendor_product(
     if vendor and product:
         return vendor, product
 
-    # 1. Try CPE names
+    # 1. Try CPE names (most reliable — structured data)
     if not (vendor and product) and cpe_names:
         cpe_v, cpe_p = extract_from_cpe_list(cpe_names)
         if cpe_v and not vendor:
             vendor = cpe_v
         if cpe_p and not product:
             product = cpe_p
+
+    if vendor and product:
+        return vendor, product
 
     # 2. Try affected_products list
     if not (vendor and product) and affected_products:
@@ -169,6 +422,9 @@ def extract_vendor_product(
             vendor = ap_v
         if ap_p and not product:
             product = ap_p
+
+    if vendor and product:
+        return vendor, product
 
     # 3. Try source-specific raw_json parsing
     if not (vendor and product) and raw_json:
@@ -192,5 +448,39 @@ def extract_vendor_product(
                 vendor = m_v
             if m_p and not product:
                 product = m_p
+
+    if vendor and product:
+        return vendor, product
+
+    # 4. Try description text parsing
+    desc_text = description
+    if not desc_text and raw_json:
+        # Get description from raw_json if not passed directly
+        descriptions = raw_json.get("descriptions", [])
+        for d in descriptions:
+            if d.get("lang") == "en":
+                desc_text = d.get("value", "")
+                break
+        if not desc_text and descriptions:
+            desc_text = descriptions[0].get("value", "")
+
+    if not (vendor and product) and desc_text:
+        desc_v, desc_p = extract_from_description(desc_text)
+        if desc_v and not vendor:
+            vendor = desc_v
+        if desc_p and not product:
+            product = desc_p
+
+    if vendor and product:
+        return vendor, product
+
+    # 5. Try sourceIdentifier (CNA email → vendor)
+    if not vendor and raw_json:
+        src_id = raw_json.get("sourceIdentifier", "")
+        si_v, si_p = extract_from_source_identifier(src_id)
+        if si_v and not vendor:
+            vendor = si_v
+        if si_p and not product:
+            product = si_p
 
     return vendor, product

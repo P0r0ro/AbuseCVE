@@ -370,13 +370,16 @@ async def pql_search(
 
 @router.post("/backfill-vendor-product")
 async def backfill_vendor_product(
-    batch_size: int = Query(500, ge=100, le=5000),
+    batch_size: int = Query(1000, ge=100, le=5000),
     db: AsyncSession = Depends(get_db),
 ):
     """Backfill missing vendor/product fields for existing CVEs.
 
-    Processes CVEs that have NULL vendor or product and attempts to extract
-    them from cpe_names, affected_products, and raw_json data.
+    Processes ALL CVEs with NULL vendor or product using:
+    - CPE names, affected_products, raw_json (source-specific parsing)
+    - Description text parsing (pattern-based)
+    - sourceIdentifier CNA email → vendor mapping
+    - Rejected CVEs are marked as [rejected]
     """
     from app.engine.vendor_product_extractor import extract_vendor_product
 
@@ -393,16 +396,22 @@ async def backfill_vendor_product(
     if total_missing == 0:
         return {"status": "ok", "message": "All CVEs already have vendor/product", "updated": 0}
 
-    # Process in batches
+    # Process using ID-based pagination (avoids infinite loops on un-updatable rows)
     updated_count = 0
-    offset = 0
+    processed_count = 0
+    last_id = 0
 
-    while offset < total_missing:
+    while True:
         result = await db.execute(
             select(CVE)
-            .where(or_(CVE.vendor.is_(None), CVE.product.is_(None)))
+            .where(
+                and_(
+                    CVE.id > last_id,
+                    or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                )
+            )
+            .order_by(asc(CVE.id))
             .limit(batch_size)
-            .offset(0)  # Always 0 because we update as we go
         )
         cves = result.scalars().all()
         if not cves:
@@ -410,6 +419,9 @@ async def backfill_vendor_product(
 
         batch_updated = 0
         for cve in cves:
+            last_id = cve.id
+            processed_count += 1
+
             new_vendor, new_product = extract_vendor_product(
                 vendor=cve.vendor,
                 product=cve.product,
@@ -418,6 +430,7 @@ async def backfill_vendor_product(
                 raw_json=cve.raw_json,
                 source=cve.source,
                 sources=cve.sources,
+                description=cve.description,
             )
 
             updates = {}
@@ -434,27 +447,42 @@ async def backfill_vendor_product(
 
         await db.commit()
         updated_count += batch_updated
-        offset += batch_size
-        logger.info(f"Vendor/product backfill: {updated_count} updated so far ({offset}/{total_missing} processed)")
+        logger.info(
+            f"Vendor/product backfill: {updated_count} updated, "
+            f"{processed_count}/{total_missing} processed"
+        )
 
-        # If no more CVEs to process (all remaining ones couldn't be backfilled)
-        if not cves or len(cves) < batch_size:
-            break
-
-    # Final count of still-missing
-    remaining_result = await db.execute(
+    # Final counts
+    remaining_both = (await db.execute(
         select(func.count()).select_from(
             select(CVE.id).where(
                 and_(CVE.vendor.is_(None), CVE.product.is_(None))
             ).subquery()
         )
-    )
-    still_missing_both = remaining_result.scalar() or 0
+    )).scalar() or 0
+
+    remaining_vendor = (await db.execute(
+        select(func.count()).select_from(
+            select(CVE.id).where(CVE.vendor.is_(None)).subquery()
+        )
+    )).scalar() or 0
+
+    remaining_product = (await db.execute(
+        select(func.count()).select_from(
+            select(CVE.id).where(CVE.product.is_(None)).subquery()
+        )
+    )).scalar() or 0
 
     return {
         "status": "ok",
         "total_missing_before": total_missing,
+        "processed": processed_count,
         "updated": updated_count,
-        "still_missing_both": still_missing_both,
-        "message": f"Backfilled {updated_count} CVEs. {still_missing_both} still missing both vendor and product.",
+        "still_missing_vendor": remaining_vendor,
+        "still_missing_product": remaining_product,
+        "still_missing_both": remaining_both,
+        "message": (
+            f"Backfilled {updated_count} of {processed_count} processed CVEs. "
+            f"{remaining_both} still missing both vendor and product."
+        ),
     }
