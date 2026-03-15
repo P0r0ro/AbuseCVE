@@ -511,3 +511,165 @@ async def backfill_vendor_product(
             f"{remaining_both} still missing both vendor and product."
         ),
     }
+
+
+# Known third-party CNA reporters that were incorrectly mapped as vendors
+_INACCURATE_VENDORS = {"github", "cert_pl", "cert_vde", "vulncheck", "tenable", "rapid7", "cisa"}
+
+# Max length for a clean product name — longer means it's probably a sentence fragment
+_MAX_CLEAN_PRODUCT_LEN = 60
+
+
+@router.post("/reextract-vendor-product")
+async def reextract_vendor_product(
+    batch_size: int = Query(500, ge=100, le=2000),
+):
+    """Re-extract vendor/product for CVEs with known inaccurate values.
+
+    Targets two categories:
+    1. Vendor set to a known third-party reporter (github, cert_vde, vulncheck, etc.)
+    2. Product field containing sentence fragments (length > 60 chars)
+
+    NULLs out the inaccurate fields first, then re-runs extraction with improved logic.
+    """
+    from app.engine.vendor_product_extractor import extract_vendor_product
+    from app.database import async_session
+
+    # Step 1: Count and NULL out inaccurate records
+    nulled_vendor = 0
+    nulled_product = 0
+
+    async with async_session() as session:
+        # NULL out inaccurate vendors (third-party reporters)
+        for bad_vendor in _INACCURATE_VENDORS:
+            result = await session.execute(
+                update(CVE)
+                .where(CVE.vendor == bad_vendor)
+                .values(vendor=None)
+            )
+            nulled_vendor += result.rowcount
+
+        # NULL out sentence-fragment products (longer than threshold)
+        result = await session.execute(
+            update(CVE)
+            .where(func.length(CVE.product) > _MAX_CLEAN_PRODUCT_LEN)
+            .values(product=None)
+        )
+        nulled_product += result.rowcount
+
+        # Also NULL products containing telltale sentence patterns
+        for pattern in [" is a ", " is an ", ". from ", " from %d"]:
+            result = await session.execute(
+                update(CVE)
+                .where(CVE.product.ilike(f"%{pattern}%"))
+                .values(product=None)
+            )
+            nulled_product += result.rowcount
+
+        await session.commit()
+
+    logger.info(
+        f"Re-extract: nulled {nulled_vendor} inaccurate vendors, "
+        f"{nulled_product} inaccurate products"
+    )
+
+    # Step 2: Now re-run backfill on all CVEs with NULL vendor or product
+    async with async_session() as session:
+        total_missing = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(
+                    or_(CVE.vendor.is_(None), CVE.product.is_(None))
+                ).subquery()
+            )
+        )).scalar() or 0
+
+    updated_count = 0
+    processed_count = 0
+    last_id = 0
+
+    while True:
+        async with async_session() as session:
+            try:
+                result = await session.execute(
+                    select(
+                        CVE.id, CVE.vendor, CVE.product, CVE.cpe_names,
+                        CVE.affected_products, CVE.raw_json, CVE.source,
+                        CVE.sources, CVE.description,
+                    )
+                    .where(
+                        and_(
+                            CVE.id > last_id,
+                            or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                        )
+                    )
+                    .order_by(asc(CVE.id))
+                    .limit(batch_size)
+                )
+                rows = result.all()
+                if not rows:
+                    break
+
+                batch_updated = 0
+                for row in rows:
+                    cve_id, cur_vendor, cur_product = row[0], row[1], row[2]
+                    cpe_names, affected_prods, raw_json = row[3], row[4], row[5]
+                    source, sources, description = row[6], row[7], row[8]
+
+                    last_id = cve_id
+                    processed_count += 1
+
+                    new_vendor, new_product = extract_vendor_product(
+                        vendor=cur_vendor,
+                        product=cur_product,
+                        cpe_names=cpe_names,
+                        affected_products=affected_prods,
+                        raw_json=raw_json,
+                        source=source,
+                        sources=sources,
+                        description=description,
+                    )
+
+                    updates = {}
+                    if new_vendor and not cur_vendor:
+                        updates["vendor"] = new_vendor
+                    if new_product and not cur_product:
+                        updates["product"] = new_product
+
+                    if updates:
+                        await session.execute(
+                            update(CVE).where(CVE.id == cve_id).values(**updates)
+                        )
+                        batch_updated += 1
+
+                await session.commit()
+                updated_count += batch_updated
+
+            except Exception as e:
+                logger.error(f"Re-extract batch error at id>{last_id}: {e}")
+                await session.rollback()
+                last_id += batch_size
+                continue
+
+    # Final counts
+    async with async_session() as session:
+        remaining_both = (await session.execute(
+            select(func.count()).select_from(
+                select(CVE.id).where(
+                    and_(CVE.vendor.is_(None), CVE.product.is_(None))
+                ).subquery()
+            )
+        )).scalar() or 0
+
+    return {
+        "status": "ok",
+        "nulled_inaccurate_vendors": nulled_vendor,
+        "nulled_inaccurate_products": nulled_product,
+        "total_reprocessed": processed_count,
+        "updated_with_better_values": updated_count,
+        "still_missing_both": remaining_both,
+        "message": (
+            f"Cleared {nulled_vendor} inaccurate vendors and {nulled_product} inaccurate products. "
+            f"Re-extracted {updated_count} of {processed_count} CVEs. "
+            f"{remaining_both} still missing both."
+        ),
+    }

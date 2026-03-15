@@ -7,8 +7,9 @@ Extraction priority:
 1. CPE names (most reliable — structured data)
 2. Affected products list
 3. Source-specific raw_json parsing
-4. Description text parsing (pattern-based)
-5. sourceIdentifier (CNA email domain mapping)
+4. Reference URL mining (GitHub/GitLab repo URLs)
+5. Description text parsing (pattern-based)
+6. sourceIdentifier (CNA email domain mapping — own-product CNAs only)
 """
 
 from __future__ import annotations
@@ -16,13 +17,14 @@ from __future__ import annotations
 import logging
 import re
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 
 # ── CNA email → vendor mapping ──────────────────────────────────────────────
 # Maps sourceIdentifier email domains to known vendors.
-# Only includes CNAs that report their OWN products (not third-party reporters).
+# ONLY includes CNAs that report their OWN products (not third-party reporters).
 CNA_VENDOR_MAP = {
     "asustor.com": "asustor",
     "apple.com": "apple",
@@ -88,15 +90,8 @@ CNA_VENDOR_MAP = {
     "lge.com": "lg",
     "hitachi.co.jp": "hitachi",
     "open-xchange.com": "open-xchange",
-    "cert.pl": "cert_pl",
-    "cert.vde.com": "cert_vde",
     "hcl.com": "hcl",
     "psirt@hcl.com": "hcl",
-    "vulncheck.com": "vulncheck",
-    "tenable.com": "tenable",
-    "rapid7.com": "rapid7",
-    "cisa.gov": "cisa",
-    "github.com": "github",
     "linux.org.uk": "linux",
     "kernel.org": "linux",
     "canonical.com": "canonical",
@@ -124,11 +119,21 @@ CNA_VENDOR_MAP = {
     "wago.com": "wago",
 }
 
-# CNAs that are third-party reporters — sourceIdentifier tells us the ecosystem, not the vendor
+# CNAs that are third-party reporters — sourceIdentifier tells us the ecosystem, not the vendor.
+# These are NOT vendors themselves; they report CVEs on behalf of others.
+# The value is the ecosystem hint (used only if description parsing finds nothing better).
 CNA_ECOSYSTEM_MAP = {
     "wordfence.com": "wordpress",
     "patchstack.com": "wordpress",
     "wpscan.com": "wordpress",
+    # Third-party security reporters / coordinating CNAs — NOT vendors
+    "github.com": None,        # GitHub Security Advisories — reports for any project
+    "cert.pl": None,           # CERT Poland — reports for any vendor
+    "cert.vde.com": None,      # CERT@VDE — reports for industrial vendors
+    "vulncheck.com": None,     # VulnCheck — vulnerability intelligence, not a vendor
+    "tenable.com": None,       # Tenable — scanner vendor, reports others' vulns
+    "rapid7.com": None,        # Rapid7 — scanner vendor, reports others' vulns
+    "cisa.gov": None,          # CISA — US gov coordinator, reports for any vendor
 }
 
 
@@ -244,6 +249,92 @@ def extract_from_mitre_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str]
     return None, None
 
 
+# ── Domains to skip when mining reference URLs for vendor info ───────────
+# These are hosting/advisory platforms, not vendor sites.
+_REFERENCE_SKIP_DOMAINS = {
+    "nvd.nist.gov", "cve.org", "cve.mitre.org", "www.cve.org",
+    "vuldb.com", "exploit-db.com", "www.exploit-db.com",
+    "packetstormsecurity.com", "seclists.org", "www.openwall.com",
+    "securityfocus.com", "bugzilla.redhat.com", "access.redhat.com",
+    "security.gentoo.org", "lists.debian.org", "www.debian.org",
+    "ubuntu.com", "usn.ubuntu.com", "bugs.launchpad.net",
+    "www.securitytracker.com", "securitytracker.com",
+    "exchange.xforce.ibmcloud.com", "www.kb.cert.org",
+    "tools.cisco.com", "sec.cloudapps.cisco.com",
+    "msrc.microsoft.com", "portal.msrc.microsoft.com",
+    "support.apple.com", "www.zerodayinitiative.com",
+    "www.wordfence.com", "www.patchstack.com",
+    "plugins.trac.wordpress.org", "wordpress.org",
+    "web.archive.org", "archive.org",
+}
+
+
+def extract_from_references(raw_json: dict) -> Tuple[Optional[str], Optional[str]]:
+    """Extract vendor/product from CVE reference URLs.
+
+    Mines GitHub/GitLab repo URLs and known vendor domains from the
+    references array in NVD raw_json.
+    """
+    if not raw_json:
+        return None, None
+
+    references = raw_json.get("references", [])
+    if not references:
+        return None, None
+
+    github_candidates = []
+    gitlab_candidates = []
+
+    for ref in references:
+        url = ref.get("url", "") if isinstance(ref, dict) else ""
+        if not url:
+            continue
+
+        try:
+            parsed = urlparse(url)
+            host = parsed.hostname or ""
+            path = parsed.path.strip("/")
+        except Exception:
+            continue
+
+        # Skip advisory/aggregator sites
+        if host in _REFERENCE_SKIP_DOMAINS:
+            continue
+
+        path_parts = [p for p in path.split("/") if p]
+
+        # GitHub: github.com/{owner}/{repo}/...
+        if host in ("github.com", "www.github.com") and len(path_parts) >= 2:
+            owner = path_parts[0].lower()
+            repo = path_parts[1].lower()
+            # Skip GitHub meta pages
+            if owner in ("advisories", "github", "actions", "features", "topics"):
+                continue
+            github_candidates.append((owner, repo))
+
+        # GitLab: gitlab.com/{owner}/{repo}/...
+        elif host in ("gitlab.com", "www.gitlab.com") and len(path_parts) >= 2:
+            owner = path_parts[0].lower()
+            repo = path_parts[1].lower()
+            if owner in ("explore", "help", "gitlab-org"):
+                continue
+            gitlab_candidates.append((owner, repo))
+
+    # Prefer GitHub refs (more common for open-source CVEs)
+    for owner, repo in github_candidates:
+        # Clean repo name: strip ".git" suffix
+        repo = re.sub(r'\.git$', '', repo)
+        if owner and repo and len(owner) < 50 and len(repo) < 50:
+            return owner, repo
+
+    for owner, repo in gitlab_candidates:
+        repo = re.sub(r'\.git$', '', repo)
+        if owner and repo and len(owner) < 50 and len(repo) < 50:
+            return owner, repo
+
+    return None, None
+
+
 def _clean_product_name(name: str) -> Optional[str]:
     """Clean up extracted product names — strip noise, limit length."""
     if not name:
@@ -252,12 +343,22 @@ def _clean_product_name(name: str) -> Optional[str]:
     # Strip leading "the "
     if name.lower().startswith("the "):
         name = name[4:]
-    # Strip trailing version-like suffixes
-    name = re.sub(r'\s+v?\d+[\d.]*\s*$', '', name)
+    # Strip trailing version-like suffixes (must have dot or 'v' prefix to avoid stripping
+    # single digits that are part of the product name, e.g. "Contact Form 7")
+    name = re.sub(r'\s+v\d+[\d.]*\s*$', '', name)       # v1.2.3
+    name = re.sub(r'\s+\d+\.\d[\d.]*\s*$', '', name)    # 10.3.1 (must have dot)
     # Strip trailing "(also known as ...)"
     name = re.sub(r'\s*\(also known as[^)]*\)\s*$', '', name, flags=re.IGNORECASE)
-    name = name.strip()
-    if not name or len(name) > 100 or len(name) < 2:
+    # Strip trailing "is a/an ..." sentences captured by greedy patterns
+    name = re.sub(r'\s+is\s+(?:a|an)\s+.*$', '', name, flags=re.IGNORECASE)
+    # Strip trailing ": from ..." or ". from ..." version range fragments
+    name = re.sub(r'\s*[:.]?\s+from\s+\d.*$', '', name, flags=re.IGNORECASE)
+    # Strip trailing "before ..." version references
+    name = re.sub(r'\s+before\s+(?:version\s+)?\d.*$', '', name, flags=re.IGNORECASE)
+    # Strip trailing "through ..." version references
+    name = re.sub(r'\s+through\s+\d.*$', '', name, flags=re.IGNORECASE)
+    name = name.strip().rstrip('.,;:')
+    if not name or len(name) > 80 or len(name) < 2:
         return None
     return name.lower()
 
@@ -294,8 +395,9 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
         return "wordpress", _clean_product_name(m.group(1))
 
     # ── "This issue affects {Product}: from/through" (Patchstack/USOM style) ─
+    # Only capture the product name BEFORE the colon, not the version range
     m = re.search(
-        r'This\s+issue\s+affects\s+(.+?):\s+(?:from|through|before)',
+        r'This\s+issue\s+affects\s+([^:,]+?)(?:\s*:\s*(?:from|through|before)|\s*,\s)',
         desc, re.IGNORECASE,
     )
     if m:
@@ -304,13 +406,11 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
             return None, product_name
 
     # ── "{Product} is a/an ..." at start of description ─────────────────────
-    # e.g. "pyLoad is a free and open-source download manager..."
-    # e.g. "ZenUML is JavaScript-based diagramming tool..."
-    # e.g. "quic-go is an implementation of the QUIC protocol..."
-    # e.g. "Webhood is a self-hosted URL scanner..."
-    # e.g. "DocsGPT is a GPT-powered chat for documentation..."
+    # Only captures the product name (before "is a/an"), NOT the description after it
+    # e.g. "pyLoad is a free..." → product = "pyload"
+    # e.g. "Umbraco is an ASP.NET CMS..." → product = "umbraco"
     m = re.match(
-        r'^([A-Za-z][A-Za-z0-9._/ -]{1,50}?)\s+is\s+(?:a\s+|an\s+)',
+        r'^([A-Za-z][A-Za-z0-9._/-]{0,50})\s+is\s+(?:a\s+|an\s+)',
         desc,
     )
     if m:
@@ -587,30 +687,45 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
 def extract_from_source_identifier(source_identifier: str) -> Tuple[Optional[str], Optional[str]]:
     """Map NVD sourceIdentifier (CNA email) to vendor.
 
-    Only maps CNAs that report their own products.
-    Third-party reporters (Wordfence, Patchstack) return ecosystem hint instead.
+    Only maps CNAs that report their OWN products.
+    Third-party reporters (GitHub, CISA, VulnCheck, etc.) are in CNA_ECOSYSTEM_MAP
+    with value=None and are explicitly skipped — they'd produce false vendor matches.
     """
     if not source_identifier or "@" not in source_identifier:
         return None, None
 
     domain = source_identifier.split("@", 1)[1].lower()
 
-    # Direct domain match
-    if domain in CNA_VENDOR_MAP:
-        return CNA_VENDOR_MAP[domain], None
+    def _lookup(d: str) -> Tuple[Optional[str], Optional[str]]:
+        # Check own-product vendor map first
+        if d in CNA_VENDOR_MAP:
+            return CNA_VENDOR_MAP[d], None
+        # Check ecosystem map — only return if value is not None
+        # (None means "known third-party reporter, skip entirely")
+        if d in CNA_ECOSYSTEM_MAP:
+            eco = CNA_ECOSYSTEM_MAP[d]
+            if eco is not None:
+                return eco, None
+            return None, None  # Explicitly skip third-party reporters
+        return None, None
 
-    # Ecosystem hint
+    # Direct domain match
+    v, p = _lookup(domain)
+    if v is not None:
+        return v, p
+    # If domain is in ecosystem map with None, it was explicitly skipped
     if domain in CNA_ECOSYSTEM_MAP:
-        return CNA_ECOSYSTEM_MAP[domain], None
+        return None, None
 
     # Try parent domain (e.g. "ch.abb.com" → "abb.com", "psirt.hcl.com" → "hcl.com")
     parts = domain.split(".")
     if len(parts) > 2:
         parent_domain = ".".join(parts[-2:])
-        if parent_domain in CNA_VENDOR_MAP:
-            return CNA_VENDOR_MAP[parent_domain], None
+        v, p = _lookup(parent_domain)
+        if v is not None:
+            return v, p
         if parent_domain in CNA_ECOSYSTEM_MAP:
-            return CNA_ECOSYSTEM_MAP[parent_domain], None
+            return None, None
 
     return None, None
 
@@ -682,7 +797,18 @@ def extract_vendor_product(
     if vendor and product:
         return vendor, product
 
-    # 4. Try description text parsing
+    # 4. Try reference URL mining (GitHub/GitLab repo URLs)
+    if not (vendor and product) and raw_json:
+        ref_v, ref_p = extract_from_references(raw_json)
+        if ref_v and not vendor:
+            vendor = ref_v
+        if ref_p and not product:
+            product = ref_p
+
+    if vendor and product:
+        return vendor, product
+
+    # 5. Try description text parsing
     desc_text = description
     if not desc_text and raw_json:
         # Get description from raw_json if not passed directly
@@ -704,7 +830,7 @@ def extract_vendor_product(
     if vendor and product:
         return vendor, product
 
-    # 5. Try sourceIdentifier (CNA email → vendor)
+    # 6. Try sourceIdentifier (CNA email → vendor, own-product CNAs only)
     if not vendor and raw_json:
         src_id = raw_json.get("sourceIdentifier", "")
         si_v, si_p = extract_from_source_identifier(src_id)
