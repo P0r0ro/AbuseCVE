@@ -187,14 +187,15 @@ async def diagnose_missing_vendor_product(
         "AND description LIKE 'Rejected reason:%'"
     ))).scalar() or 0
 
-    # Sample NON-REJECTED CVEs missing vendor/product
+    # Sample NON-REJECTED CVEs missing vendor/product (skip already-tagged [rejected])
     non_rejected_sample = await db.execute(
         select(CVE).where(
             and_(
                 or_(CVE.vendor.is_(None), CVE.product.is_(None)),
                 CVE.description.notlike("Rejected reason:%"),
+                or_(CVE.vendor.is_(None), CVE.vendor != "[rejected]"),
             )
-        ).limit(10)
+        ).limit(20)
     )
     nr_samples = []
     for cve in non_rejected_sample.scalars().all():
@@ -202,6 +203,8 @@ async def diagnose_missing_vendor_product(
         nr_samples.append({
             "cve_id": cve.cve_id,
             "source": cve.source,
+            "vendor": cve.vendor,
+            "product": cve.product,
             "vulnStatus": raw.get("vulnStatus") if isinstance(raw, dict) else None,
             "sourceIdentifier": raw.get("sourceIdentifier") if isinstance(raw, dict) else None,
             "description_preview": (cve.description or "")[:300],
