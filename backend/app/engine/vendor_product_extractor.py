@@ -272,8 +272,13 @@ _REFERENCE_SKIP_DOMAINS = {
 def extract_from_references(raw_json: dict) -> Tuple[Optional[str], Optional[str]]:
     """Extract vendor/product from CVE reference URLs.
 
-    Mines GitHub/GitLab repo URLs and known vendor domains from the
-    references array in NVD raw_json.
+    Mines GitHub/GitLab repo URLs from the references array.
+
+    Important: GitHub repo owner is often a personal username (e.g. "shirshaw64p"),
+    NOT the vendor. We only use the repo name as the product and leave vendor
+    for other methods to fill in (description parsing, vendor inference, etc.).
+
+    Exception: when repo owner matches a known organization/vendor name we use it.
     """
     if not raw_json:
         return None, None
@@ -307,8 +312,11 @@ def extract_from_references(raw_json: dict) -> Tuple[Optional[str], Optional[str
         if host in ("github.com", "www.github.com") and len(path_parts) >= 2:
             owner = path_parts[0].lower()
             repo = path_parts[1].lower()
-            # Skip GitHub meta pages
+            # Skip GitHub meta pages and "security-advisories" subpath
             if owner in ("advisories", "github", "actions", "features", "topics"):
+                continue
+            # Skip advisory-only paths (owner's security fork, not the real project)
+            if repo == "security-advisories":
                 continue
             github_candidates.append((owner, repo))
 
@@ -320,17 +328,36 @@ def extract_from_references(raw_json: dict) -> Tuple[Optional[str], Optional[str
                 continue
             gitlab_candidates.append((owner, repo))
 
-    # Prefer GitHub refs (more common for open-source CVEs)
-    for owner, repo in github_candidates:
-        # Clean repo name: strip ".git" suffix
+    # Use repo name as product. For vendor, only use owner if it matches
+    # a known vendor or looks like an organization (matches the repo name).
+    # Generic repo names (cms, app, api, etc.) use the owner as product instead.
+    _GENERIC_REPO_NAMES = {
+        "cms", "app", "api", "web", "server", "client", "core", "sdk",
+        "backend", "frontend", "platform", "service", "plugin", "module",
+        "security-advisories", "advisories", "security",
+    }
+
+    all_candidates = github_candidates + gitlab_candidates
+    for owner, repo in all_candidates:
         repo = re.sub(r'\.git$', '', repo)
-        if owner and repo and len(owner) < 50 and len(repo) < 50:
+        if not repo or len(repo) > 50:
+            continue
+
+        # If repo name is too generic (e.g. "cms", "app"), use owner as the product
+        if repo in _GENERIC_REPO_NAMES:
+            return owner, owner
+
+        # If owner matches repo name (e.g. umbraco/Umbraco-CMS), owner is the vendor
+        repo_base = re.sub(r'[-_].*$', '', repo)  # "umbraco-cms" → "umbraco"
+        if owner == repo_base or owner == repo:
             return owner, repo
 
-    for owner, repo in gitlab_candidates:
-        repo = re.sub(r'\.git$', '', repo)
-        if owner and repo and len(owner) < 50 and len(repo) < 50:
+        # If owner is a known CNA vendor, use it
+        if owner in CNA_VENDOR_MAP.values():
             return owner, repo
+
+        # Otherwise, only return the product — don't guess vendor from username
+        return None, repo
 
     return None, None
 
@@ -839,4 +866,50 @@ def extract_vendor_product(
         if si_p and not product:
             product = si_p
 
+    # 7. Infer vendor from product when we have product but no vendor
+    if product and not vendor:
+        vendor = _infer_vendor_from_product(product)
+
     return vendor, product
+
+
+    # Additional vendor names commonly seen as first-word prefixes in product names
+# that aren't in CNA_VENDOR_MAP (because they don't have a CNA email).
+_EXTRA_KNOWN_VENDORS = {
+    "jetbrains", "zoho", "trendmicro", "broadcom", "citrix", "mcafee",
+    "symantec", "kaspersky", "autodesk", "bentley", "dassault",
+    "honeywell", "ge", "emerson", "yokogawa", "mitsubishi",
+    "schneider", "phoenix", "pilz", "codesys", "wago", "beckhoff",
+    "aveva", "inductive", "ignition", "kepware", "opc",
+}
+
+
+def _infer_vendor_from_product(product: str) -> str:
+    """Infer vendor from product name when vendor is missing.
+
+    Rules:
+    - Multi-word product where first word is a known vendor:
+      "jetbrains datalore" → vendor = "jetbrains"
+    - Single-word product or no recognized vendor prefix:
+      vendor = product (e.g. "statamic" → vendor = "statamic")
+    """
+    if not product:
+        return product
+
+    # Skip rejected markers
+    if product.startswith("["):
+        return product
+
+    parts = product.strip().split()
+
+    if len(parts) >= 2:
+        first_word = parts[0].lower()
+        # Check if the first word is a known vendor
+        known_vendors = set(CNA_VENDOR_MAP.values()) | _EXTRA_KNOWN_VENDORS
+        if first_word in known_vendors:
+            return first_word
+
+    # Default: vendor = product (for single-word or unknown multi-word)
+    # For multi-word like "contact form 7", the whole thing is the product
+    # and the vendor is the product name too
+    return product

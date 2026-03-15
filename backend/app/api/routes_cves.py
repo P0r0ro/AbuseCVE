@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -526,14 +527,17 @@ async def reextract_vendor_product(
 ):
     """Re-extract vendor/product for CVEs with known inaccurate values.
 
-    Targets two categories:
+    Targets three categories:
     1. Vendor set to a known third-party reporter (github, cert_vde, vulncheck, etc.)
     2. Product field containing sentence fragments (length > 60 chars)
+    3. Vendor set to a GitHub username (doesn't match product or known vendors)
 
     NULLs out the inaccurate fields first, then re-runs extraction with improved logic.
     """
-    from app.engine.vendor_product_extractor import extract_vendor_product
+    from app.engine.vendor_product_extractor import extract_vendor_product, CNA_VENDOR_MAP
     from app.database import async_session
+
+    known_vendors = set(CNA_VENDOR_MAP.values())
 
     # Step 1: Count and NULL out inaccurate records
     nulled_vendor = 0
@@ -548,6 +552,46 @@ async def reextract_vendor_product(
                 .values(vendor=None)
             )
             nulled_vendor += result.rowcount
+
+        # NULL out GitHub-username vendors: vendor doesn't match product, isn't a
+        # known vendor, and the CVE came from GitHub CNA (sourceIdentifier contains github.com)
+        # Process in batches to check vendor vs product mismatch
+        _cursor = 0
+        while True:
+            rows = (await session.execute(
+                select(CVE.id, CVE.vendor, CVE.product)
+                .where(
+                    and_(
+                        CVE.id > _cursor,
+                        CVE.vendor.isnot(None),
+                        CVE.product.isnot(None),
+                    )
+                )
+                .order_by(asc(CVE.id))
+                .limit(2000)
+            )).all()
+            if not rows:
+                break
+            for row in rows:
+                _cursor = row[0]
+                v, p = row[1], row[2]
+                if not v or not p:
+                    continue
+                # If vendor matches product or starts product name, it's fine
+                p_base = re.sub(r'[-_].*$', '', p)
+                if v == p or v == p_base or p.startswith(v):
+                    continue
+                # If vendor is a known vendor, it's fine
+                if v in known_vendors:
+                    continue
+                # If vendor is a rejected marker, skip
+                if v.startswith("["):
+                    continue
+                # Otherwise this is likely a GitHub username or wrong vendor — NULL it
+                await session.execute(
+                    update(CVE).where(CVE.id == row[0]).values(vendor=None)
+                )
+                nulled_vendor += 1
 
         # NULL out sentence-fragment products (longer than threshold)
         result = await session.execute(
