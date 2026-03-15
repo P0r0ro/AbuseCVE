@@ -83,6 +83,45 @@ CNA_VENDOR_MAP = {
     "veritas.com": "veritas",
     "withsecure.com": "withsecure",
     "rockwellautomation.com": "rockwell_automation",
+    "jci.com": "johnson_controls",
+    "productsecurity@jci.com": "johnson_controls",
+    "lge.com": "lg",
+    "hitachi.co.jp": "hitachi",
+    "open-xchange.com": "open-xchange",
+    "cert.pl": "cert_pl",
+    "cert.vde.com": "cert_vde",
+    "hcl.com": "hcl",
+    "psirt@hcl.com": "hcl",
+    "vulncheck.com": "vulncheck",
+    "tenable.com": "tenable",
+    "rapid7.com": "rapid7",
+    "cisa.gov": "cisa",
+    "github.com": "github",
+    "linux.org.uk": "linux",
+    "kernel.org": "linux",
+    "canonical.com": "canonical",
+    "debian.org": "debian",
+    "fedoraproject.org": "fedora",
+    "gentoo.org": "gentoo",
+    "opensuse.org": "opensuse",
+    "nozominetworks.com": "nozomi_networks",
+    "tp-link.com.cn": "tp-link",
+    "mediatek.com": "mediatek",
+    "unisoc.com": "unisoc",
+    "liferay.com": "liferay",
+    "mitel.com": "mitel",
+    "tibco.com": "tibco",
+    "zohocorp.com": "zoho",
+    "checkmk.com": "checkmk",
+    "grafana.com": "grafana",
+    "sonicwall.com": "sonicwall",
+    "watchguard.com": "watchguard",
+    "beckhoff.com": "beckhoff",
+    "phoenixcontact.com": "phoenix_contact",
+    "moxa.com": "moxa",
+    "deltaww.com": "delta_electronics",
+    "advantech.com": "advantech",
+    "wago.com": "wago",
 }
 
 # CNAs that are third-party reporters — sourceIdentifier tells us the ecosystem, not the vendor
@@ -205,6 +244,24 @@ def extract_from_mitre_raw(raw_json: dict) -> Tuple[Optional[str], Optional[str]
     return None, None
 
 
+def _clean_product_name(name: str) -> Optional[str]:
+    """Clean up extracted product names — strip noise, limit length."""
+    if not name:
+        return None
+    name = name.strip().rstrip('.,;:')
+    # Strip leading "the "
+    if name.lower().startswith("the "):
+        name = name[4:]
+    # Strip trailing version-like suffixes
+    name = re.sub(r'\s+v?\d+[\d.]*\s*$', '', name)
+    # Strip trailing "(also known as ...)"
+    name = re.sub(r'\s*\(also known as[^)]*\)\s*$', '', name, flags=re.IGNORECASE)
+    name = name.strip()
+    if not name or len(name) > 100 or len(name) < 2:
+        return None
+    return name.lower()
+
+
 def extract_from_description(description: str) -> Tuple[Optional[str], Optional[str]]:
     """Extract vendor/product from CVE description text using common patterns.
 
@@ -221,21 +278,12 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
         return "[rejected]", "[rejected]"
 
     # ── WordPress plugin pattern (very common — Wordfence/Patchstack) ────────
-    # "The {Product} plugin for WordPress is vulnerable to..."
-    m = re.match(
-        r'The\s+(.+?)\s+plugin\s+for\s+WordPress\s+is\s+vulnerable\s+to',
-        desc, re.IGNORECASE,
-    )
-    if m:
-        return "wordpress", m.group(1).strip().lower()
-
-    # "The {Product} plugin for WordPress..."  (broader)
     m = re.match(
         r'The\s+(.+?)\s+plugin\s+for\s+WordPress\b',
         desc, re.IGNORECASE,
     )
     if m:
-        return "wordpress", m.group(1).strip().lower()
+        return "wordpress", _clean_product_name(m.group(1))
 
     # "The {Product} theme for WordPress..."
     m = re.match(
@@ -243,37 +291,107 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
         desc, re.IGNORECASE,
     )
     if m:
-        return "wordpress", m.group(1).strip().lower()
+        return "wordpress", _clean_product_name(m.group(1))
 
-    # ── Patchstack style: "...vulnerability in {Vendor} {Product} allows..." ─
-    # "...vulnerability in {Product} allows {Attack}. This issue affects {Product}:"
+    # ── "This issue affects {Product}: from/through" (Patchstack/USOM style) ─
     m = re.search(
-        r'This issue affects\s+(.+?):\s+from',
+        r'This\s+issue\s+affects\s+(.+?):\s+(?:from|through|before)',
         desc, re.IGNORECASE,
     )
     if m:
-        product_name = m.group(1).strip()
-        # Try to split "Vendor Product" if there are multiple words
-        return None, product_name.lower()
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
-    # ── "A vulnerability in {Product} of/from {Vendor}" ─────────────────────
+    # ── "{Product} is a/an ..." at start of description ─────────────────────
+    # e.g. "pyLoad is a free and open-source download manager..."
+    # e.g. "ZenUML is JavaScript-based diagramming tool..."
+    # e.g. "passport-saml2 is a ..."
     m = re.match(
-        r'(?:A|An)\s+.{0,80}?vulnerability\s+(?:in|of)\s+(?:the\s+)?(.+?)\s+(?:of|from|by)\s+(.+?)[\s,.]',
+        r'^([A-Za-z][A-Za-z0-9._/ -]{1,50}?)\s+is\s+(?:a\s+|an\s+)?(?:free|open|JavaScript|Python|PHP|Ruby|Go|Java|lightweight|web|cloud|network|cross|full|simple|popular|powerful|small|modular|secure)',
         desc, re.IGNORECASE,
     )
     if m:
-        product_name = m.group(1).strip().lower()
-        vendor_name = m.group(2).strip().rstrip('.').lower()
-        if len(vendor_name) < 50 and len(product_name) < 80:
-            return vendor_name, product_name
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
-    # ── "{Product} before {version}" ────────────────────────────────────────
+    # ── "{product} in {Product} before {version}" ───────────────────────────
+    # e.g. "ssh in OpenSSH before 10.1 allows..."
     m = re.match(
-        r'^([A-Z][A-Za-z0-9\s._-]{1,50}?)\s+before\s+(?:version\s+)?[\d.]+',
+        r'^[a-z][a-zA-Z0-9._-]*\s+in\s+([A-Z][A-Za-z0-9._/ -]{1,50}?)\s+before\s',
         desc,
     )
     if m:
-        return None, m.group(1).strip().lower()
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "vulnerability exists in {Vendor} {Product}" ────────────────────────
+    m = re.search(
+        r'vulnerability\s+exists\s+in\s+([A-Z][A-Za-z]+)\s+([A-Z][A-Za-z0-9._/ -]+?)[\s,.]',
+        desc,
+    )
+    if m:
+        vendor = m.group(1).strip().lower()
+        product = _clean_product_name(m.group(2))
+        if vendor and product:
+            return vendor, product
+
+    # ── "{Vendor} {Product} versions ..." ───────────────────────────────────
+    # e.g. "QiAnXin TianQing Management Center versions up to..."
+    m = re.match(
+        r'^([A-Z][A-Za-z]+)\s+(.+?)\s+versions?\s+',
+        desc,
+    )
+    if m:
+        vendor = m.group(1).strip().lower()
+        product = _clean_product_name(m.group(2))
+        if vendor and product:
+            return vendor, product
+
+    # ── "{Product} (also known as ...) versions ..." ────────────────────────
+    # e.g. "Lavasoft Web Companion (also known as Ad-Aware) versions 8.9..."
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._-]+?)(?:\s*\([^)]*\))?\s+versions?\s+',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "A vulnerability in {Product} of/from/by {Vendor}" ──────────────────
+    m = re.match(
+        r'(?:A|An)\s+.{0,80}?vulnerability\s+(?:in|of)\s+(?:the\s+)?(.+?)\s+(?:of|from|by)\s+([A-Z][A-Za-z0-9._/ -]+?)[\s,.]',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        vendor_name = m.group(2).strip().rstrip('.').lower()
+        if vendor_name and product_name and len(vendor_name) < 50:
+            return vendor_name, product_name
+
+    # ── "...was found in the {Product} of {Vendor}" ─────────────────────────
+    m = re.search(
+        r'was\s+found\s+in\s+(?:the\s+)?(.+?)\s+of\s+([A-Z][A-Za-z0-9._/ -]+?)[\s,.]',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        vendor_name = m.group(2).strip().rstrip('.').lower()
+        if vendor_name and product_name and len(vendor_name) < 50:
+            return vendor_name, product_name
+
+    # ── "{Product} before {version}" at start ───────────────────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._/-]{1,60}?)\s+before\s+(?:version\s+)?[\d.]+',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
     # ── "An issue was discovered in {Product} {version}" ────────────────────
     m = re.match(
@@ -281,64 +399,27 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
         desc, re.IGNORECASE,
     )
     if m:
-        product_name = m.group(1).strip()
-        if len(product_name) < 80:
-            return None, product_name.lower()
-
-    # ── "...was found in the {Product} of {Vendor}" ─────────────────────────
-    m = re.search(
-        r'was\s+found\s+in\s+(?:the\s+)?(.+?)\s+of\s+(.+?)[\s,.]',
-        desc, re.IGNORECASE,
-    )
-    if m:
-        product_name = m.group(1).strip().lower()
-        vendor_name = m.group(2).strip().rstrip('.').lower()
-        if len(vendor_name) < 50 and len(product_name) < 80:
-            return vendor_name, product_name
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
     # ── "{Vendor} {Product} {version} has/contains/allows" ──────────────────
     m = re.match(
-        r'^([A-Z][A-Za-z]+)\s+([A-Z][A-Za-z0-9._-]+)\s+[\d.]+.*?\s+(?:has|contains|allows|is vulnerable)',
+        r'^([A-Z][A-Za-z]+)\s+([A-Z][A-Za-z0-9._/-]+)\s+[\d.]+.*?\s+(?:has|contains|allows|is vulnerable)',
         desc,
     )
     if m:
         return m.group(1).strip().lower(), m.group(2).strip().lower()
 
-    # ── "The {Product} for {Platform} app before {version}" ─────────────────
+    # ── "The {Product} for/app before/through" ──────────────────────────────
     m = re.match(
         r'The\s+(.+?)\s+(?:for|app\s+for)\s+(.+?)\s+(?:app\s+)?(?:before|through|up to)',
         desc, re.IGNORECASE,
     )
     if m:
-        return None, m.group(1).strip().lower()
-
-    # ── "A/An ... vulnerability in {Product} allows/that/which" ────────────
-    m = re.match(
-        r'(?:A|An)\s+.{0,80}?vulnerability\s+in\s+(?:the\s+)?(.+?)\s+(?:allows|that|which|could|enables|makes)',
-        desc, re.IGNORECASE,
-    )
-    if m:
-        product_name = m.group(1).strip()
-        if len(product_name) < 80 and not product_name[0].islower():
-            return None, product_name.lower()
-
-    # ── "In {Product}, ..." or "In {Vendor} {Product}, ..." ────────────────
-    m = re.match(
-        r'^In\s+([A-Z][A-Za-z0-9\s._-]{1,60}?),\s',
-        desc,
-    )
-    if m:
-        product_name = m.group(1).strip()
-        if len(product_name) < 60:
-            return None, product_name.lower()
-
-    # ── "{Product} {version} and earlier/prior" ─────────────────────────────
-    m = re.match(
-        r'^([A-Z][A-Za-z0-9\s._-]{1,50}?)\s+[\d.]+\s+(?:and\s+)?(?:earlier|prior)',
-        desc,
-    )
-    if m:
-        return None, m.group(1).strip().lower()
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
     # ── "A flaw was found in {Product}" ─────────────────────────────────────
     m = re.search(
@@ -346,19 +427,87 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
         desc, re.IGNORECASE,
     )
     if m:
-        product_name = m.group(1).strip()
-        if len(product_name) < 80:
-            return None, product_name.lower()
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
-    # ── "Missing Authorization vulnerability in {Product} allows" ───────────
+    # ── "vulnerability in {Vendor} {Product}." or "in {Product} allows" ─────
+    # Tighter version: requires product to start with uppercase or be multi-word
     m = re.search(
-        r'vulnerability\s+in\s+(.+?)\s+allows\s',
+        r'vulnerability\s+in\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9._/-]+)?)\s*[.,]',
+        desc,
+    )
+    if m:
+        extracted = m.group(1).strip()
+        parts = extracted.split(None, 1)
+        if len(parts) == 2:
+            return parts[0].lower(), parts[1].lower()
+        elif len(parts) == 1:
+            product_name = _clean_product_name(parts[0])
+            if product_name:
+                return None, product_name
+
+    # ── "vulnerability in {Product} allows" — broader fallback ──────────────
+    m = re.search(
+        r'vulnerability\s+in\s+(?:the\s+)?(.+?)\s+allows\s',
         desc, re.IGNORECASE,
     )
     if m:
-        product_name = m.group(1).strip()
-        if len(product_name) < 80:
-            return None, product_name.lower()
+        product_name = _clean_product_name(m.group(1))
+        if product_name and len(product_name) < 60:
+            return None, product_name
+
+    # ── "In {Product}, ..." at start ────────────────────────────────────────
+    m = re.match(
+        r'^In\s+([A-Z][A-Za-z0-9\s._/-]{1,60}?),\s',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "{Product} {version} and earlier/prior" ─────────────────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._/-]{1,50}?)\s+[\d.]+\s+(?:and\s+)?(?:earlier|prior)',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "{Product} {version} and later/newer" ───────────────────────────────
+    m = re.match(
+        r'^([A-Z][A-Za-z0-9\s._/-]{1,50}?)\s+[\d.]+\s+(?:and\s+)?(?:later|newer)',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "{Product} provides/contains/includes" at start ─────────────────────
+    # e.g. "passport-wsfed-saml2 provides passport strategy..."
+    m = re.match(
+        r'^([A-Za-z][A-Za-z0-9._-]{2,50})\s+(?:provides|contains|includes|implements)\s',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "...in {Product} in versions from" ──────────────────────────────────
+    # e.g. "Edito CMS (Content Management System) in versions from 3.5..."
+    m = re.search(
+        r'(?:^|\s)([A-Z][A-Za-z0-9\s._/-]+?)(?:\s*\([^)]*\))?\s+in\s+versions?\s',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
 
     return None, None
 
@@ -374,13 +523,22 @@ def extract_from_source_identifier(source_identifier: str) -> Tuple[Optional[str
 
     domain = source_identifier.split("@", 1)[1].lower()
 
-    # Direct vendor match — CNA reports their own products
+    # Direct domain match
     if domain in CNA_VENDOR_MAP:
         return CNA_VENDOR_MAP[domain], None
 
-    # Ecosystem hint — helps narrow down but not definitive vendor
+    # Ecosystem hint
     if domain in CNA_ECOSYSTEM_MAP:
         return CNA_ECOSYSTEM_MAP[domain], None
+
+    # Try parent domain (e.g. "ch.abb.com" → "abb.com", "psirt.hcl.com" → "hcl.com")
+    parts = domain.split(".")
+    if len(parts) > 2:
+        parent_domain = ".".join(parts[-2:])
+        if parent_domain in CNA_VENDOR_MAP:
+            return CNA_VENDOR_MAP[parent_domain], None
+        if parent_domain in CNA_ECOSYSTEM_MAP:
+            return CNA_ECOSYSTEM_MAP[parent_domain], None
 
     return None, None
 
