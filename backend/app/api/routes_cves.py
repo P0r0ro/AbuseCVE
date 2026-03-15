@@ -91,23 +91,13 @@ async def list_cves(
     }
 
 
-@router.get("/{cve_id}")
-async def get_cve(cve_id: str, db: AsyncSession = Depends(get_db)):
-    """Get detailed CVE information."""
-    result = await db.execute(select(CVE).where(CVE.cve_id == cve_id))
-    cve = result.scalar_one_or_none()
-    if not cve:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"CVE {cve_id} not found")
-    return cve.to_dict()
-
-
 @router.get("/diagnostics/missing-vendor-product")
 async def diagnose_missing_vendor_product(
     db: AsyncSession = Depends(get_db),
 ):
     """Diagnose why vendor/product fields are missing — shows what data is available."""
-    from sqlalchemy import text
+    from sqlalchemy import text, cast
+    from sqlalchemy.types import Text
 
     # Count totals
     total = (await db.execute(select(func.count()).select_from(CVE))).scalar() or 0
@@ -132,30 +122,38 @@ async def diagnose_missing_vendor_product(
 
     # Sample 10 CVEs missing vendor/product — show what data they DO have
     sample_result = await db.execute(
-        select(
-            CVE.cve_id, CVE.source, CVE.sources, CVE.vendor, CVE.product,
-            CVE.cpe_names, CVE.affected_products, CVE.description,
-        ).where(
+        select(CVE).where(
             or_(CVE.vendor.is_(None), CVE.product.is_(None))
         ).limit(10)
     )
     samples = []
-    for row in sample_result.all():
+    for cve in sample_result.scalars().all():
+        cpe_list = cve.cpe_names or []
+        affected_list = cve.affected_products or []
+        raw = cve.raw_json or {}
+
+        # Check what keys raw_json has
+        raw_keys = list(raw.keys())[:10] if isinstance(raw, dict) else []
+
         samples.append({
-            "cve_id": row[0],
-            "source": row[1],
-            "sources": row[2],
-            "vendor": row[3],
-            "product": row[4],
-            "has_cpe_names": bool(row[5]) and len(row[5]) > 0 if row[5] else False,
-            "cpe_names_count": len(row[5]) if row[5] else 0,
-            "cpe_sample": (row[5] or [])[:3],
-            "has_affected_products": bool(row[6]) and len(row[6]) > 0 if row[6] else False,
-            "affected_products_sample": (row[6] or [])[:3],
-            "description_preview": (row[7] or "")[:200],
+            "cve_id": cve.cve_id,
+            "source": cve.source,
+            "sources": cve.sources,
+            "vendor": cve.vendor,
+            "product": cve.product,
+            "cpe_names_count": len(cpe_list),
+            "cpe_sample": cpe_list[:3],
+            "affected_products_count": len(affected_list),
+            "affected_products_sample": affected_list[:3],
+            "raw_json_keys": raw_keys,
+            "raw_json_has_configurations": "configurations" in raw if isinstance(raw, dict) else False,
+            "raw_json_has_affected": bool(raw.get("containers", {}).get("cna", {}).get("affected")) if isinstance(raw, dict) else False,
+            "raw_json_has_affected_release": "affected_release" in raw if isinstance(raw, dict) else False,
+            "raw_json_has_bugzilla_desc": "bugzilla_description" in raw if isinstance(raw, dict) else False,
+            "description_preview": (cve.description or "")[:200],
         })
 
-    # Check how many have raw_json with useful data
+    # Check how many have raw_json
     has_raw_json = (await db.execute(
         select(func.count()).select_from(CVE).where(
             and_(
@@ -165,25 +163,16 @@ async def diagnose_missing_vendor_product(
         )
     )).scalar() or 0
 
-    has_cpe = (await db.execute(
-        select(func.count()).select_from(CVE).where(
-            and_(
-                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
-                CVE.cpe_names.isnot(None),
-                func.json_array_length(CVE.cpe_names) > 0,
-            )
-        )
-    )).scalar() or 0
+    # Use text() for PostgreSQL-specific JSON queries to avoid ORM issues
+    has_cpe = (await db.execute(text(
+        "SELECT COUNT(*) FROM cves WHERE (vendor IS NULL OR product IS NULL) "
+        "AND cpe_names IS NOT NULL AND cpe_names::text != '[]' AND cpe_names::text != 'null'"
+    ))).scalar() or 0
 
-    has_affected = (await db.execute(
-        select(func.count()).select_from(CVE).where(
-            and_(
-                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
-                CVE.affected_products.isnot(None),
-                func.json_array_length(CVE.affected_products) > 0,
-            )
-        )
-    )).scalar() or 0
+    has_affected = (await db.execute(text(
+        "SELECT COUNT(*) FROM cves WHERE (vendor IS NULL OR product IS NULL) "
+        "AND affected_products IS NOT NULL AND affected_products::text != '[]' AND affected_products::text != 'null'"
+    ))).scalar() or 0
 
     return {
         "total_cves": total,
@@ -195,10 +184,20 @@ async def diagnose_missing_vendor_product(
             "has_raw_json": has_raw_json,
             "has_cpe_names": has_cpe,
             "has_affected_products": has_affected,
-            "has_none_of_above": missing_both - has_cpe - has_affected,
         },
         "samples": samples,
     }
+
+
+@router.get("/{cve_id}")
+async def get_cve(cve_id: str, db: AsyncSession = Depends(get_db)):
+    """Get detailed CVE information."""
+    result = await db.execute(select(CVE).where(CVE.cve_id == cve_id))
+    cve = result.scalar_one_or_none()
+    if not cve:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"CVE {cve_id} not found")
+    return cve.to_dict()
 
 
 class AdvancedSearchRequest(BaseModel):
