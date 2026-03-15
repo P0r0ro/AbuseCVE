@@ -306,9 +306,34 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
     # ── "{Product} is a/an ..." at start of description ─────────────────────
     # e.g. "pyLoad is a free and open-source download manager..."
     # e.g. "ZenUML is JavaScript-based diagramming tool..."
-    # e.g. "passport-saml2 is a ..."
+    # e.g. "quic-go is an implementation of the QUIC protocol..."
+    # e.g. "Webhood is a self-hosted URL scanner..."
+    # e.g. "DocsGPT is a GPT-powered chat for documentation..."
     m = re.match(
-        r'^([A-Za-z][A-Za-z0-9._/ -]{1,50}?)\s+is\s+(?:a\s+|an\s+)?(?:free|open|JavaScript|Python|PHP|Ruby|Go|Java|lightweight|web|cloud|network|cross|full|simple|popular|powerful|small|modular|secure)',
+        r'^([A-Za-z][A-Za-z0-9._/ -]{1,50}?)\s+is\s+(?:a\s+|an\s+)',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "The {Vendor} {Product} server/portal/... is vulnerable" ──────────
+    # e.g. "The HCL BigFix Inventory server is vulnerable to path traversal"
+    # Must come BEFORE the generic "is vulnerable" pattern below.
+    m = re.match(
+        r'The\s+([A-Z][A-Za-z]+)\s+(.+?)\s+(?:server|portal|platform|application|service|component|module|interface|system|client|agent|manager|daemon)\s+(?:is|was|has|allows|does|can)',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        vendor = m.group(1).strip().lower()
+        product = _clean_product_name(m.group(2))
+        if vendor and product:
+            return vendor, product
+
+    # Broader: "{Product} is {adjective}-based/powered/..." (no article)
+    m = re.match(
+        r'^([A-Za-z][A-Za-z0-9._/ -]{1,50}?)\s+is\s+(?:vulnerable|based|designed|built|used|intended)',
         desc, re.IGNORECASE,
     )
     if m:
@@ -502,6 +527,53 @@ def extract_from_description(description: str) -> Tuple[Optional[str], Optional[
     # e.g. "Edito CMS (Content Management System) in versions from 3.5..."
     m = re.search(
         r'(?:^|\s)([A-Z][A-Za-z0-9\s._/-]+?)(?:\s*\([^)]*\))?\s+in\s+versions?\s',
+        desc,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── VulDB: "A vulnerability was detected/found in {Vendor} {Product} up to/through" ─
+    m = re.match(
+        r'A\s+vulnerability\s+was\s+(?:detected|found)\s+in\s+(.+?)\s+(?:up\s+to|through|before)\s',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        extracted = m.group(1).strip()
+        parts = extracted.split(None, 1)
+        if len(parts) == 2:
+            return parts[0].lower(), _clean_product_name(parts[1])
+        elif len(parts) == 1:
+            return None, _clean_product_name(parts[0])
+
+    # ── "{Product} has a vulnerability" ─────────────────────────────────────
+    # e.g. "OpenPLC_V3 has a vulnerability in the enipThread function..."
+    m = re.match(
+        r'^([A-Za-z][A-Za-z0-9._-]{2,40})\s+has\s+(?:a\s+)?(?:vulnerability|a\s+code|a\s+path)',
+        desc, re.IGNORECASE,
+    )
+    if m:
+        product_name = _clean_product_name(m.group(1))
+        if product_name:
+            return None, product_name
+
+    # ── "in {Vendor} {Product} {version}" ───────────────────────────────────
+    # e.g. "in TIBCO JasperReports Server 8.0.4 and 8.2.0 allows"
+    m = re.search(
+        r'in\s+([A-Z][A-Za-z]+)\s+([A-Z][A-Za-z0-9\s._/-]+?)\s+[\d.]+',
+        desc,
+    )
+    if m:
+        vendor = m.group(1).strip().lower()
+        product = _clean_product_name(m.group(2))
+        if vendor and product and len(vendor) > 1:
+            return vendor, product
+
+    # ── "in the {Product} portal/server/..." ────────────────────────────────
+    # e.g. "in the SonicOS SSLVPN portal allows..."
+    m = re.search(
+        r'in\s+the\s+([A-Z][A-Za-z0-9\s._/-]+?)\s+(?:portal|server|platform|application|service|interface|system|component)',
         desc,
     )
     if m:
