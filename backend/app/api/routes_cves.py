@@ -102,6 +102,105 @@ async def get_cve(cve_id: str, db: AsyncSession = Depends(get_db)):
     return cve.to_dict()
 
 
+@router.get("/diagnostics/missing-vendor-product")
+async def diagnose_missing_vendor_product(
+    db: AsyncSession = Depends(get_db),
+):
+    """Diagnose why vendor/product fields are missing — shows what data is available."""
+    from sqlalchemy import text
+
+    # Count totals
+    total = (await db.execute(select(func.count()).select_from(CVE))).scalar() or 0
+    missing_vendor = (await db.execute(
+        select(func.count()).select_from(CVE).where(CVE.vendor.is_(None))
+    )).scalar() or 0
+    missing_product = (await db.execute(
+        select(func.count()).select_from(CVE).where(CVE.product.is_(None))
+    )).scalar() or 0
+    missing_both = (await db.execute(
+        select(func.count()).select_from(CVE).where(
+            and_(CVE.vendor.is_(None), CVE.product.is_(None))
+        )
+    )).scalar() or 0
+
+    # Breakdown by source
+    source_breakdown = (await db.execute(
+        select(CVE.source, func.count()).where(
+            or_(CVE.vendor.is_(None), CVE.product.is_(None))
+        ).group_by(CVE.source)
+    )).all()
+
+    # Sample 10 CVEs missing vendor/product — show what data they DO have
+    sample_result = await db.execute(
+        select(
+            CVE.cve_id, CVE.source, CVE.sources, CVE.vendor, CVE.product,
+            CVE.cpe_names, CVE.affected_products, CVE.description,
+        ).where(
+            or_(CVE.vendor.is_(None), CVE.product.is_(None))
+        ).limit(10)
+    )
+    samples = []
+    for row in sample_result.all():
+        samples.append({
+            "cve_id": row[0],
+            "source": row[1],
+            "sources": row[2],
+            "vendor": row[3],
+            "product": row[4],
+            "has_cpe_names": bool(row[5]) and len(row[5]) > 0 if row[5] else False,
+            "cpe_names_count": len(row[5]) if row[5] else 0,
+            "cpe_sample": (row[5] or [])[:3],
+            "has_affected_products": bool(row[6]) and len(row[6]) > 0 if row[6] else False,
+            "affected_products_sample": (row[6] or [])[:3],
+            "description_preview": (row[7] or "")[:200],
+        })
+
+    # Check how many have raw_json with useful data
+    has_raw_json = (await db.execute(
+        select(func.count()).select_from(CVE).where(
+            and_(
+                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                CVE.raw_json.isnot(None),
+            )
+        )
+    )).scalar() or 0
+
+    has_cpe = (await db.execute(
+        select(func.count()).select_from(CVE).where(
+            and_(
+                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                CVE.cpe_names.isnot(None),
+                func.json_array_length(CVE.cpe_names) > 0,
+            )
+        )
+    )).scalar() or 0
+
+    has_affected = (await db.execute(
+        select(func.count()).select_from(CVE).where(
+            and_(
+                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                CVE.affected_products.isnot(None),
+                func.json_array_length(CVE.affected_products) > 0,
+            )
+        )
+    )).scalar() or 0
+
+    return {
+        "total_cves": total,
+        "missing_vendor": missing_vendor,
+        "missing_product": missing_product,
+        "missing_both": missing_both,
+        "by_source": {row[0]: row[1] for row in source_breakdown},
+        "data_availability": {
+            "has_raw_json": has_raw_json,
+            "has_cpe_names": has_cpe,
+            "has_affected_products": has_affected,
+            "has_none_of_above": missing_both - has_cpe - has_affected,
+        },
+        "samples": samples,
+    }
+
+
 class AdvancedSearchRequest(BaseModel):
     """Advanced search using the query engine."""
     query: Dict[str, Any]
