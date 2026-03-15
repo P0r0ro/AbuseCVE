@@ -174,18 +174,55 @@ async def diagnose_missing_vendor_product(
         "AND affected_products IS NOT NULL AND affected_products::text != '[]' AND affected_products::text != 'null'"
     ))).scalar() or 0
 
+    # Breakdown by vulnStatus in raw_json
+    vuln_status_breakdown = (await db.execute(text(
+        "SELECT raw_json->>'vulnStatus' as status, COUNT(*) "
+        "FROM cves WHERE (vendor IS NULL OR product IS NULL) "
+        "GROUP BY raw_json->>'vulnStatus' ORDER BY COUNT(*) DESC"
+    ))).all()
+
+    # Count rejected (description starts with 'Rejected reason:')
+    rejected_count = (await db.execute(text(
+        "SELECT COUNT(*) FROM cves WHERE (vendor IS NULL OR product IS NULL) "
+        "AND description LIKE 'Rejected reason:%'"
+    ))).scalar() or 0
+
+    # Sample NON-REJECTED CVEs missing vendor/product
+    non_rejected_sample = await db.execute(
+        select(CVE).where(
+            and_(
+                or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                CVE.description.notlike("Rejected reason:%"),
+            )
+        ).limit(10)
+    )
+    nr_samples = []
+    for cve in non_rejected_sample.scalars().all():
+        raw = cve.raw_json or {}
+        nr_samples.append({
+            "cve_id": cve.cve_id,
+            "source": cve.source,
+            "vulnStatus": raw.get("vulnStatus") if isinstance(raw, dict) else None,
+            "sourceIdentifier": raw.get("sourceIdentifier") if isinstance(raw, dict) else None,
+            "description_preview": (cve.description or "")[:300],
+        })
+
     return {
         "total_cves": total,
         "missing_vendor": missing_vendor,
         "missing_product": missing_product,
         "missing_both": missing_both,
+        "rejected_cves": rejected_count,
+        "real_cves_missing": missing_both - rejected_count,
         "by_source": {row[0]: row[1] for row in source_breakdown},
+        "by_vuln_status": {row[0]: row[1] for row in vuln_status_breakdown},
         "data_availability": {
             "has_raw_json": has_raw_json,
             "has_cpe_names": has_cpe,
             "has_affected_products": has_affected,
         },
-        "samples": samples,
+        "non_rejected_samples": nr_samples,
+        "rejected_samples": samples[:3],
     }
 
 
