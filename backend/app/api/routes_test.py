@@ -151,3 +151,54 @@ async def test_full_chain(db: AsyncSession = Depends(get_db)):
         "overall": "pass" if all_ok else "partial",
         "steps": results,
     }
+
+
+@router.get("/email-routing")
+async def get_email_routing():
+    """Show current email routing configuration (no secrets exposed)."""
+    from app.config import settings
+
+    def _mask_emails(emails: list) -> list:
+        """Show first/last char of each email for verification without full exposure."""
+        masked = []
+        for e in emails:
+            if "@" in e:
+                local, domain = e.split("@", 1)
+                if len(local) > 2:
+                    masked.append(f"{local[0]}***{local[-1]}@{domain}")
+                else:
+                    masked.append(f"{local[0]}***@{domain}")
+            else:
+                masked.append("***")
+        return masked
+
+    return {
+        "smtp_configured": bool(settings.smtp_host and settings.smtp_user),
+        "smtp_from": settings.smtp_from or settings.smtp_user or "(not set)",
+        "routing": {
+            "alert_emails": {
+                "description": "CVE alert emails (individual CVE matches)",
+                "recipients": _mask_emails(settings.recipient_list),
+                "count": len(settings.recipient_list),
+            },
+            "scan_summary_with_alerts": {
+                "description": "Scan summaries with >0 alerts (actionable)",
+                "recipients": _mask_emails(settings.recipient_list),
+                "count": len(settings.recipient_list),
+            },
+            "scan_summary_no_alerts": {
+                "description": "Scan summaries with 0 alerts (debug/admin)",
+                "recipients": _mask_emails(settings.scan_recipient_list),
+                "count": len(settings.scan_recipient_list),
+            },
+            "health_report": {
+                "description": "Daily health check emails",
+                "recipients": _mask_emails(settings.health_recipient_list),
+                "count": len(settings.health_recipient_list),
+            },
+            "webhook_contact": {
+                "description": "Contact email in CRM/webhook payloads",
+                "email": settings.webhook_email_address or "(not set)",
+            },
+        },
+    }

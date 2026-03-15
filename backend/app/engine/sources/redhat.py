@@ -98,10 +98,14 @@ class RedHatSource(BaseCVESource):
         affected_packages = item.get("affected_packages", [])
         affected_products = item.get("affected_release", [])
 
+        # Extract product from available data
+        from app.engine.vendor_product_extractor import extract_from_redhat_raw
+        _, product = extract_from_redhat_raw(item)
+
         return NormalizedCVE(
             cve_id=cve_id,
             vendor="redhat",
-            product=None,
+            product=product,
             description=item.get("bugzilla_description", ""),
             severity=severity,
             cvss_score=cvss_score,
@@ -186,10 +190,14 @@ class RedHatSource(BaseCVESource):
         if cwe:
             weaknesses.append(cwe)
 
+        # Extract product from detail data
+        from app.engine.vendor_product_extractor import extract_from_redhat_raw
+        _, detail_product = extract_from_redhat_raw(data)
+
         return NormalizedCVE(
             cve_id=cve_id,
             vendor="redhat",
-            product=None,
+            product=detail_product,
             description=description,
             severity=severity,
             cvss_score=cvss_score,

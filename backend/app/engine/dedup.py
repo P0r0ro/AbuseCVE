@@ -142,11 +142,22 @@ async def dedup_and_store(
                 existing.description, cve_data.description
             )
 
-            # Update vendor/product if missing
-            if cve_data.vendor and not existing.vendor:
-                existing.vendor = cve_data.vendor
-            if cve_data.product and not existing.product:
-                existing.product = cve_data.product
+            # Update vendor/product if missing — use full extraction pipeline
+            if not existing.vendor or not existing.product:
+                from app.engine.vendor_product_extractor import extract_vendor_product
+                new_vendor, new_product = extract_vendor_product(
+                    vendor=existing.vendor or cve_data.vendor,
+                    product=existing.product or cve_data.product,
+                    cpe_names=existing.cpe_names,
+                    affected_products=existing.affected_products,
+                    raw_json=cve_data.raw_json or existing.raw_json,
+                    source=existing.source,
+                    sources=existing.sources,
+                )
+                if new_vendor and not existing.vendor:
+                    existing.vendor = new_vendor
+                if new_product and not existing.product:
+                    existing.product = new_product
 
             # Check if modified_date changed (for update detection)
             was_modified = False
@@ -230,12 +241,13 @@ async def dedup_and_store_bulk(
     if not cves:
         return [], 0
 
-    # 1. Batch lookup: get all existing CVE IDs in one query
+    # 1. Batch lookup: get existing CVEs (including vendor/product for backfill)
     cve_ids = [c.cve_id for c in cves]
     result = await session.execute(
-        select(CVE.cve_id, CVE.id).where(CVE.cve_id.in_(cve_ids))
+        select(CVE.cve_id, CVE.id, CVE.vendor, CVE.product).where(CVE.cve_id.in_(cve_ids))
     )
-    existing_ids = {row[0] for row in result.all()}
+    existing_rows = {row[0]: {"id": row[1], "vendor": row[2], "product": row[3]} for row in result.all()}
+    existing_ids = set(existing_rows.keys())
 
     # 2. Split into new vs existing
     new_cves: List[NormalizedCVE] = []
@@ -287,7 +299,7 @@ async def dedup_and_store_bulk(
             )
             await session.execute(stmt)
 
-    # 4. Lightweight update for existing CVEs (just bump seen_count + merge kev_flag)
+    # 4. Lightweight update for existing CVEs (bump seen_count, merge kev_flag, backfill vendor/product)
     if existing_cves:
         kev_ids = [c.cve_id for c in existing_cves if c.kev_flag]
         if kev_ids:
@@ -304,6 +316,38 @@ async def dedup_and_store_bulk(
                 .where(CVE.cve_id.in_(non_kev_ids))
                 .values(last_seen=datetime.utcnow())
             )
+
+        # Backfill vendor/product for existing CVEs that have missing fields
+        from app.engine.vendor_product_extractor import extract_vendor_product
+        vendor_updates = []
+        for cve_data in existing_cves:
+            existing_info = existing_rows.get(cve_data.cve_id, {})
+            if existing_info.get("vendor") and existing_info.get("product"):
+                continue  # Already has both, skip
+            new_vendor, new_product = extract_vendor_product(
+                vendor=existing_info.get("vendor") or cve_data.vendor,
+                product=existing_info.get("product") or cve_data.product,
+                cpe_names=cve_data.cpe_names,
+                affected_products=cve_data.affected_products,
+                raw_json=cve_data.raw_json,
+                source=cve_data.source,
+                sources=cve_data.sources,
+            )
+            updates = {}
+            if new_vendor and not existing_info.get("vendor"):
+                updates["vendor"] = new_vendor
+            if new_product and not existing_info.get("product"):
+                updates["product"] = new_product
+            if updates:
+                vendor_updates.append((cve_data.cve_id, updates))
+
+        # Apply vendor/product updates in small batches
+        for cve_id, updates in vendor_updates:
+            await session.execute(
+                update(CVE).where(CVE.cve_id == cve_id).values(**updates)
+            )
+        if vendor_updates:
+            logger.info(f"Dedup (bulk): backfilled vendor/product for {len(vendor_updates)} CVEs")
 
     await session.flush()
     logger.info(

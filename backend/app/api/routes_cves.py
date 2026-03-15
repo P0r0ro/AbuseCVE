@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from sqlalchemy import select, func, desc, asc
+from sqlalchemy import select, func, desc, asc, update, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -230,4 +230,96 @@ async def pql_search(
         "pages": (total + data.per_page - 1) // data.per_page if data.per_page else 0,
         "pql": data.pql,
         "parsed_conditions": conditions,
+    }
+
+
+@router.post("/backfill-vendor-product")
+async def backfill_vendor_product(
+    batch_size: int = Query(500, ge=100, le=5000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Backfill missing vendor/product fields for existing CVEs.
+
+    Processes CVEs that have NULL vendor or product and attempts to extract
+    them from cpe_names, affected_products, and raw_json data.
+    """
+    from app.engine.vendor_product_extractor import extract_vendor_product
+
+    # Count how many need backfill
+    count_result = await db.execute(
+        select(func.count()).select_from(
+            select(CVE.id).where(
+                or_(CVE.vendor.is_(None), CVE.product.is_(None))
+            ).subquery()
+        )
+    )
+    total_missing = count_result.scalar() or 0
+
+    if total_missing == 0:
+        return {"status": "ok", "message": "All CVEs already have vendor/product", "updated": 0}
+
+    # Process in batches
+    updated_count = 0
+    offset = 0
+
+    while offset < total_missing:
+        result = await db.execute(
+            select(CVE)
+            .where(or_(CVE.vendor.is_(None), CVE.product.is_(None)))
+            .limit(batch_size)
+            .offset(0)  # Always 0 because we update as we go
+        )
+        cves = result.scalars().all()
+        if not cves:
+            break
+
+        batch_updated = 0
+        for cve in cves:
+            new_vendor, new_product = extract_vendor_product(
+                vendor=cve.vendor,
+                product=cve.product,
+                cpe_names=cve.cpe_names,
+                affected_products=cve.affected_products,
+                raw_json=cve.raw_json,
+                source=cve.source,
+                sources=cve.sources,
+            )
+
+            updates = {}
+            if new_vendor and not cve.vendor:
+                updates["vendor"] = new_vendor
+            if new_product and not cve.product:
+                updates["product"] = new_product
+
+            if updates:
+                await db.execute(
+                    update(CVE).where(CVE.id == cve.id).values(**updates)
+                )
+                batch_updated += 1
+
+        await db.commit()
+        updated_count += batch_updated
+        offset += batch_size
+        logger.info(f"Vendor/product backfill: {updated_count} updated so far ({offset}/{total_missing} processed)")
+
+        # If no more CVEs to process (all remaining ones couldn't be backfilled)
+        if not cves or len(cves) < batch_size:
+            break
+
+    # Final count of still-missing
+    remaining_result = await db.execute(
+        select(func.count()).select_from(
+            select(CVE.id).where(
+                and_(CVE.vendor.is_(None), CVE.product.is_(None))
+            ).subquery()
+        )
+    )
+    still_missing_both = remaining_result.scalar() or 0
+
+    return {
+        "status": "ok",
+        "total_missing_before": total_missing,
+        "updated": updated_count,
+        "still_missing_both": still_missing_both,
+        "message": f"Backfilled {updated_count} CVEs. {still_missing_both} still missing both vendor and product.",
     }

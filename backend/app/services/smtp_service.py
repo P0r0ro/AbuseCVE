@@ -165,11 +165,12 @@ async def send_cve_alert(cve_data: dict, rule_name: str = "") -> dict:
     cve_id = cve_data.get("cve_id", "UNKNOWN")
     subject = f"🛡️ AbuseCVE Alert [{severity}] — {cve_id}"
 
-    return await send_email(subject=subject, html_body=html)
+    # CVE alerts always go to alert recipients (analysts)
+    return await send_email(subject=subject, html_body=html, recipients=settings.recipient_list)
 
 
 async def send_health_report(report_data: dict) -> dict:
-    """Send the daily health report email."""
+    """Send the daily health report email to health recipients."""
     try:
         template = template_env.get_template("health_report.html")
         html = template.render(
@@ -180,7 +181,11 @@ async def send_health_report(report_data: dict) -> dict:
         html = _fallback_health_html(report_data)
 
     subject = f"🔒 AbuseCVE Daily Health Report — {datetime.utcnow().strftime('%Y-%m-%d')}"
-    return await send_email(subject=subject, html_body=html)
+    return await send_email(
+        subject=subject,
+        html_body=html,
+        recipients=settings.health_recipient_list,
+    )
 
 
 async def send_filter_test_email(
@@ -256,7 +261,12 @@ async def send_filter_test_email(
 
 
 async def send_scan_summary(scan_result: dict, matched_cves: list = None) -> dict:
-    """Send a scan cycle summary email — always sent after every scan."""
+    """Send a scan cycle summary email.
+
+    Routing logic:
+    - Scan with >0 alerts → sent to ALERT_RECIPIENTS (analysts see actionable results)
+    - Scan with 0 alerts → sent to SCAN_RECIPIENTS only (admin/debug, reduces analyst noise)
+    """
     total_fetched = scan_result.get("total_fetched", 0)
     filtered = scan_result.get("filtered", 0)
     new_alerted = scan_result.get("new_alerted", 0)
@@ -323,7 +333,14 @@ async def send_scan_summary(scan_result: dict, matched_cves: list = None) -> dic
     """
 
     subject = f"🔍 AbuseCVE Scan — {new_alerted} alerts, {total_fetched} fetched"
-    return await send_email(subject=subject, html_body=html)
+
+    # Route: scans with alerts go to analysts; 0-alert scans go to admin/scan recipients only
+    if new_alerted > 0:
+        recipients = settings.recipient_list  # Alert recipients (analysts)
+    else:
+        recipients = settings.scan_recipient_list  # Scan-only recipients (admin/debug)
+
+    return await send_email(subject=subject, html_body=html, recipients=recipients)
 
 
 async def send_test_email() -> dict:

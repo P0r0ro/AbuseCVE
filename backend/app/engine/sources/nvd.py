@@ -111,12 +111,16 @@ class NVDSource(BaseCVESource):
                     cpe = match.get("criteria", "")
                     if cpe:
                         cpe_names.append(cpe)
-                        # Extract vendor/product from CPE 2.3
-                        # cpe:2.3:a:vendor:product:...
-                        parts = cpe.split(":")
-                        if len(parts) >= 5 and not vendor:
-                            vendor = parts[3]
-                            product = parts[4]
+
+        # Extract vendor/product using the full extraction pipeline
+        from app.engine.vendor_product_extractor import extract_vendor_product
+        vendor, product = extract_vendor_product(
+            vendor=None,
+            product=None,
+            cpe_names=cpe_names,
+            raw_json=cve_data,
+            source="NVD",
+        )
 
         # References
         references = [

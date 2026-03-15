@@ -186,12 +186,15 @@ async def dispatch_to_all_integrations(db_session, cve_dict: dict, rule_name: st
     if not integrations:
         return
 
+    from app.config import settings as app_settings
+
     payload = {
         "event": "cve_alert",
         "source": "AbuseCVE",
         "timestamp": datetime.utcnow().isoformat(),
         "cve": cve_dict,
         "rule_name": rule_name,
+        "contact_email": app_settings.webhook_email_address,
     }
 
     for integration in integrations:
