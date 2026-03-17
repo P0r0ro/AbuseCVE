@@ -70,6 +70,10 @@ celery_app.conf.update(
                 minute=settings.health_report_minute,
             ),
         },
+        "weekly-cpe-sync": {
+            "task": "app.tasks.cve_tasks.sync_cpe_dictionary",
+            "schedule": crontab(hour=3, minute=0, day_of_week=0),  # Sunday 03:00 UTC
+        },
     },
 )
 
@@ -92,6 +96,8 @@ def _task_name_to_worker_type(task_name: str) -> str:
     """Map full dotted task name to a short human-readable worker type."""
     mapping = {
         "app.tasks.cve_tasks.run_cve_scan": "cve_scan",
+        "app.tasks.cve_tasks.sync_cpe_dictionary": "cpe_sync",
+        "app.tasks.cve_tasks.enrich_cve_vendor_product": "enrichment",
         "app.tasks.health_tasks.generate_and_send_health_report": "health",
         "app.tasks.init_tasks.initialize_database": "init",
         "app.tasks.init_tasks.initialize_database_local": "init_local",

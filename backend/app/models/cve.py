@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Float, Boolean, DateTime, JSON, Index
+    Column, Integer, String, Text, Float, Boolean, DateTime, JSON, Index, ForeignKey
 )
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 
@@ -16,6 +17,15 @@ class CVE(Base):
     cve_id = Column(String(30), unique=True, nullable=False, index=True)  # e.g. CVE-2024-12345
     vendor = Column(String(255), nullable=True, index=True)
     product = Column(String(255), nullable=True, index=True)
+
+    # Normalized FK links to the Golden List (nullable — populated by enrichment pipeline)
+    vendor_id = Column(Integer, ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
+    extraction_method = Column(String(30), nullable=True)  # cpe_match, db_lookup, heuristic, llm
+
+    # Relationships (lazy to avoid N+1 in list queries)
+    normalized_vendor = relationship("Vendor", foreign_keys=[vendor_id], lazy="select")
+    normalized_product = relationship("Product", foreign_keys=[product_id], lazy="select")
     description = Column(Text, nullable=True)
     severity = Column(String(20), nullable=True)  # LOW, MEDIUM, HIGH, CRITICAL
     cvss_score = Column(Float, nullable=True)
@@ -49,6 +59,9 @@ class CVE(Base):
             "cve_id": self.cve_id,
             "vendor": self.vendor,
             "product": self.product,
+            "vendor_id": self.vendor_id,
+            "product_id": self.product_id,
+            "extraction_method": self.extraction_method,
             "description": self.description,
             "severity": self.severity,
             "cvss_score": self.cvss_score,

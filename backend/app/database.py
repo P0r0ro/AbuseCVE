@@ -41,6 +41,7 @@ async def init_db():
     async with engine.begin() as conn:
         from app.models import cve, filter_rule, alert_log, knowledge_article, health_report  # noqa
         from app.models import worker_log, integration  # noqa  – new tables
+        from app.models import vendor_product  # noqa  – normalized vendor/product entities
         await conn.run_sync(Base.metadata.create_all)
 
         # Lightweight migration: add columns that may be missing from older schemas.
@@ -57,6 +58,10 @@ async def init_db():
             ("cves", "cvss_scores", "JSONB"),
             ("cves", "weaknesses", "JSONB"),
             ("cves", "affected_products", "JSONB"),
+            # CVE normalized vendor/product FK columns
+            ("cves", "vendor_id", "INTEGER REFERENCES vendors(id) ON DELETE SET NULL"),
+            ("cves", "product_id", "INTEGER REFERENCES products(id) ON DELETE SET NULL"),
+            ("cves", "extraction_method", "VARCHAR(30)"),
             # AlertLog new columns
             ("alert_logs", "rule_name", "VARCHAR(255)"),
             ("alert_logs", "is_new_cve", "BOOLEAN"),

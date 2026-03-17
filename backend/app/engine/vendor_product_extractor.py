@@ -873,6 +873,187 @@ def extract_vendor_product(
     return vendor, product
 
 
+    # ── 4-Tier Pipeline (Golden List + LLM integration) ────────────────────────
+
+# In-memory cache of the Golden List for fast lookups during pipeline runs.
+# Populated by load_golden_list() — call once at start or when cache expires.
+_golden_vendor_map: dict = {}    # vendor_name → vendor_id
+_golden_product_map: dict = {}   # (vendor_id, product_name) → product_id
+_golden_loaded: bool = False
+
+
+def load_golden_list_sync():
+    """Load the Golden List from the database into memory (sync, for Celery workers).
+
+    Uses psycopg2 (sync driver) since this runs in Celery context.
+    Safe to call multiple times — only loads once unless force_reload=True.
+    """
+    global _golden_vendor_map, _golden_product_map, _golden_loaded
+
+    if _golden_loaded:
+        return
+
+    try:
+        import psycopg2
+        from app.config import settings
+
+        conn = psycopg2.connect(settings.sync_database_url)
+        cur = conn.cursor()
+
+        cur.execute("SELECT id, name FROM vendors")
+        _golden_vendor_map = {row[1]: row[0] for row in cur.fetchall()}
+
+        cur.execute("SELECT id, name, vendor_id FROM products")
+        _golden_product_map = {(row[2], row[1]): row[0] for row in cur.fetchall()}
+
+        cur.close()
+        conn.close()
+
+        _golden_loaded = True
+        logger.info(
+            f"Golden List loaded: {len(_golden_vendor_map)} vendors, "
+            f"{len(_golden_product_map)} products"
+        )
+    except Exception as e:
+        logger.warning(f"Could not load Golden List: {e}")
+
+
+async def load_golden_list_async(session):
+    """Load the Golden List from the database into memory (async, for FastAPI).
+
+    Call from request handlers or pipeline code that has an async session.
+    """
+    global _golden_vendor_map, _golden_product_map, _golden_loaded
+
+    if _golden_loaded:
+        return
+
+    try:
+        from sqlalchemy import select
+        from app.models.vendor_product import Vendor, Product
+
+        vendor_rows = (await session.execute(select(Vendor.id, Vendor.name))).all()
+        _golden_vendor_map = {row[1]: row[0] for row in vendor_rows}
+
+        product_rows = (await session.execute(
+            select(Product.id, Product.name, Product.vendor_id)
+        )).all()
+        _golden_product_map = {(row[2], row[1]): row[0] for row in product_rows}
+
+        _golden_loaded = True
+        logger.info(
+            f"Golden List loaded (async): {len(_golden_vendor_map)} vendors, "
+            f"{len(_golden_product_map)} products"
+        )
+    except Exception as e:
+        logger.warning(f"Could not load Golden List (async): {e}")
+
+
+def lookup_golden_list(vendor: str, product: str = None):
+    """Look up vendor/product against the Golden List.
+
+    Returns (vendor_id, product_id, matched) — matched=True if found in Golden List.
+    """
+    if not _golden_loaded or not vendor:
+        return None, None, False
+
+    vendor_lower = vendor.lower()
+    vid = _golden_vendor_map.get(vendor_lower)
+    if not vid:
+        return None, None, False
+
+    pid = None
+    if product:
+        pid = _golden_product_map.get((vid, product.lower()))
+
+    return vid, pid, True
+
+
+def extract_vendor_product_tiered(
+    vendor: Optional[str] = None,
+    product: Optional[str] = None,
+    cpe_names: list = None,
+    affected_products: list = None,
+    raw_json: dict = None,
+    source: str = None,
+    sources: list = None,
+    description: str = None,
+) -> Tuple[Optional[str], Optional[str], Optional[int], Optional[int], Optional[str]]:
+    """4-Tier extraction pipeline returning (vendor, product, vendor_id, product_id, method).
+
+    Tiers:
+    1. Direct CPE Match — from the CVE record's cpe_names field
+    2. DB Lookup — check extracted strings against the Golden List
+    3. Heuristic/Regex — existing logic from extract_vendor_product()
+    4. LLM Inference — handled externally (async), not called here
+
+    This function is synchronous and covers Tiers 1-3.
+    Tier 4 (LLM) must be called separately via llm_extraction_service.extract_with_llm().
+
+    Returns:
+        (vendor_str, product_str, vendor_id, product_id, extraction_method)
+    """
+    vendor_id = None
+    product_id = None
+    method = None
+
+    # Tier 1: Direct CPE Match
+    if cpe_names:
+        cpe_v, cpe_p = extract_from_cpe_list(cpe_names)
+        if cpe_v:
+            if not vendor:
+                vendor = cpe_v
+            if cpe_p and not product:
+                product = cpe_p
+            method = "cpe_match"
+
+            # Try to link to Golden List immediately
+            vid, pid, matched = lookup_golden_list(vendor, product)
+            if matched:
+                vendor_id = vid
+                product_id = pid
+                return vendor, product, vendor_id, product_id, method
+
+    # Tier 2: Golden List DB Lookup with existing vendor/product strings
+    if vendor and _golden_loaded:
+        vid, pid, matched = lookup_golden_list(vendor, product)
+        if matched:
+            vendor_id = vid
+            product_id = pid
+            if not method:
+                method = "db_lookup"
+            return vendor, product, vendor_id, product_id, method
+
+    # Tier 3: Full heuristic extraction (existing logic)
+    heur_vendor, heur_product = extract_vendor_product(
+        vendor=vendor,
+        product=product,
+        cpe_names=cpe_names,
+        affected_products=affected_products,
+        raw_json=raw_json,
+        source=source,
+        sources=sources,
+        description=description,
+    )
+
+    if heur_vendor:
+        vendor = heur_vendor
+    if heur_product:
+        product = heur_product
+
+    if not method and (heur_vendor or heur_product):
+        method = "heuristic"
+
+    # Try Golden List lookup with heuristic results
+    if vendor and _golden_loaded:
+        vid, pid, matched = lookup_golden_list(vendor, product)
+        if matched:
+            vendor_id = vid
+            product_id = pid
+
+    return vendor, product, vendor_id, product_id, method
+
+
     # Additional vendor names commonly seen as first-word prefixes in product names
 # that aren't in CNA_VENDOR_MAP (because they don't have a CNA email).
 _EXTRA_KNOWN_VENDORS = {

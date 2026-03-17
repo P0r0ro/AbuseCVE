@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     mistral_api_key: str = Field(default="")
     gemini_api_key: str = Field(default="")
 
+    # ── AI (LLM vendor/product extraction) ─────────
+    groq_api_key: str = Field(default="")
+
     # ── App ───────────────────────────────────────────
     secret_key: str = Field(default="change_me")
     app_env: str = Field(default="development")
