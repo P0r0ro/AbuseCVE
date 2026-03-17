@@ -124,100 +124,140 @@ def _parse_llm_response(text: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
-async def _call_groq(description: str) -> LLMExtractionResult:
-    """Call Groq API (Llama 3.1 70B) for vendor/product extraction."""
+async def _call_groq(description: str, max_retries: int = 3) -> LLMExtractionResult:
+    """Call Groq API (Llama 3.3 70B) with retry on 429."""
+    import asyncio
+
     api_key = settings.groq_api_key
     if not api_key:
         return LLMExtractionResult(None, None, "groq", "no_keys", "GROQ_API_KEY not configured")
 
     prompt = _build_prompt(description)
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 100,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 100,
+                    },
+                )
 
-            content = data["choices"][0]["message"]["content"]
-            vendor, product = _parse_llm_response(content)
+                # Retry on 429
+                if resp.status_code == 429:
+                    wait = 2 ** attempt + 1  # 2s, 3s, 5s
+                    logger.debug(f"Groq rate limited, waiting {wait}s (attempt {attempt + 1})")
+                    await asyncio.sleep(wait)
+                    continue
 
-            if vendor or product:
-                return LLMExtractionResult(vendor, product, "groq", "success")
-            return LLMExtractionResult(None, None, "groq", "parse_error", f"Could not parse: {content[:200]}")
+                resp.raise_for_status()
+                data = resp.json()
 
-    except httpx.HTTPStatusError as e:
-        body = e.response.text[:300] if e.response else ""
-        logger.warning(f"Groq API error: HTTP {e.response.status_code} — {body}")
-        return LLMExtractionResult(None, None, "groq", "api_error", f"HTTP {e.response.status_code}: {body}")
-    except Exception as e:
-        return LLMExtractionResult(None, None, "groq", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
+                content = data["choices"][0]["message"]["content"]
+                vendor, product = _parse_llm_response(content)
+
+                if vendor or product:
+                    return LLMExtractionResult(vendor, product, "groq", "success")
+                return LLMExtractionResult(None, None, "groq", "parse_error", f"Could not parse: {content[:200]}")
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:300] if e.response else ""
+            if e.response.status_code == 429 and attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt + 1)
+                continue
+            logger.warning(f"Groq API error: HTTP {e.response.status_code} — {body}")
+            return LLMExtractionResult(None, None, "groq", "api_error", f"HTTP {e.response.status_code}: {body}")
+        except Exception as e:
+            return LLMExtractionResult(None, None, "groq", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
+
+    return LLMExtractionResult(None, None, "groq", "api_error", "Max retries exceeded (429)")
 
 
-async def _call_gemini(description: str) -> LLMExtractionResult:
-    """Call Google Gemini Free Tier for vendor/product extraction."""
+async def _call_gemini(description: str, max_retries: int = 3) -> LLMExtractionResult:
+    """Call Google Gemini with retry on 429."""
+    import asyncio
+
     api_key = settings.gemini_api_key
     if not api_key:
         return LLMExtractionResult(None, None, "gemini", "no_keys", "GEMINI_API_KEY not configured")
 
     prompt = _SYSTEM_PROMPT + "\n\n" + _build_prompt(description)
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.1,
-                        "maxOutputTokens": 100,
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.1,
+                            "maxOutputTokens": 100,
+                        },
                     },
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+                )
 
-            content = data["candidates"][0]["content"]["parts"][0]["text"]
-            vendor, product = _parse_llm_response(content)
+                if resp.status_code == 429:
+                    wait = 2 ** attempt + 1
+                    logger.debug(f"Gemini rate limited, waiting {wait}s (attempt {attempt + 1})")
+                    await asyncio.sleep(wait)
+                    continue
 
-            if vendor or product:
-                return LLMExtractionResult(vendor, product, "gemini", "success")
-            return LLMExtractionResult(None, None, "gemini", "parse_error", f"Could not parse: {content[:200]}")
+                resp.raise_for_status()
+                data = resp.json()
 
-    except httpx.HTTPStatusError as e:
-        body = e.response.text[:300] if e.response else ""
-        logger.warning(f"Gemini API error: HTTP {e.response.status_code} — {body}")
-        return LLMExtractionResult(None, None, "gemini", "api_error", f"HTTP {e.response.status_code}: {body}")
-    except Exception as e:
-        return LLMExtractionResult(None, None, "gemini", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                vendor, product = _parse_llm_response(content)
+
+                if vendor or product:
+                    return LLMExtractionResult(vendor, product, "gemini", "success")
+                return LLMExtractionResult(None, None, "gemini", "parse_error", f"Could not parse: {content[:200]}")
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:300] if e.response else ""
+            if e.response.status_code == 429 and attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt + 1)
+                continue
+            logger.warning(f"Gemini API error: HTTP {e.response.status_code} — {body}")
+            return LLMExtractionResult(None, None, "gemini", "api_error", f"HTTP {e.response.status_code}: {body}")
+        except Exception as e:
+            return LLMExtractionResult(None, None, "gemini", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
+
+    return LLMExtractionResult(None, None, "gemini", "api_error", "Max retries exceeded (429)")
+
+
+# Throttle: minimum delay between LLM calls to avoid hammering rate limits
+_MIN_LLM_DELAY = 2.0  # seconds between calls
 
 
 async def extract_with_llm(description: str) -> LLMExtractionResult:
     """Try LLM extraction — Groq first, then Gemini as fallback.
 
-    Returns the first successful result. If both fail, returns the last error.
+    Includes rate-limit throttling (2s between calls) and retry-on-429.
     """
+    import asyncio
+
     if not description or len(description) < 20:
         return LLMExtractionResult(None, None, None, "no_keys", "Description too short for LLM")
 
     # Skip rejected/reserved CVEs
     if description.startswith("Rejected reason:") or "DO NOT USE THIS CANDIDATE" in description:
         return LLMExtractionResult(None, None, None, "success", "Rejected CVE, skipped")
+
+    # Throttle to avoid rate limits
+    await asyncio.sleep(_MIN_LLM_DELAY)
 
     # Try Groq first (faster, free tier generous)
     if settings.groq_api_key:
