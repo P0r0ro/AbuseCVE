@@ -141,7 +141,7 @@ async def _call_groq(description: str) -> LLMExtractionResult:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.1-70b-versatile",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [
                         {"role": "system", "content": _SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
@@ -161,7 +161,9 @@ async def _call_groq(description: str) -> LLMExtractionResult:
             return LLMExtractionResult(None, None, "groq", "parse_error", f"Could not parse: {content[:200]}")
 
     except httpx.HTTPStatusError as e:
-        return LLMExtractionResult(None, None, "groq", "api_error", f"HTTP {e.response.status_code}: {str(e)[:200]}")
+        body = e.response.text[:300] if e.response else ""
+        logger.warning(f"Groq API error: HTTP {e.response.status_code} — {body}")
+        return LLMExtractionResult(None, None, "groq", "api_error", f"HTTP {e.response.status_code}: {body}")
     except Exception as e:
         return LLMExtractionResult(None, None, "groq", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
 
@@ -177,7 +179,7 @@ async def _call_gemini(description: str) -> LLMExtractionResult:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
@@ -198,7 +200,9 @@ async def _call_gemini(description: str) -> LLMExtractionResult:
             return LLMExtractionResult(None, None, "gemini", "parse_error", f"Could not parse: {content[:200]}")
 
     except httpx.HTTPStatusError as e:
-        return LLMExtractionResult(None, None, "gemini", "api_error", f"HTTP {e.response.status_code}: {str(e)[:200]}")
+        body = e.response.text[:300] if e.response else ""
+        logger.warning(f"Gemini API error: HTTP {e.response.status_code} — {body}")
+        return LLMExtractionResult(None, None, "gemini", "api_error", f"HTTP {e.response.status_code}: {body}")
     except Exception as e:
         return LLMExtractionResult(None, None, "gemini", "api_error", f"{type(e).__name__}: {str(e)[:200]}")
 
