@@ -270,12 +270,16 @@ def sync_cpe_dictionary(self, use_api: bool = False):
     start = time.time()
 
     async def _fetch_cpe_via_xml():
-        """Download and parse the XML CPE dictionary."""
+        """Download and parse the XML CPE dictionary.
+
+        NOTE: NVD deprecated the XML feed in 2024. This may return 403.
+        If it fails, the caller falls back to _fetch_cpe_via_api() automatically.
+        """
         import httpx
 
         logger.info(f"CPE sync: downloading XML dictionary from {CPE_DICT_URL}")
         async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-            headers = {}
+            headers = {"User-Agent": "AbuseCVE/1.0"}
             if settings.nvd_api_key:
                 headers["apiKey"] = settings.nvd_api_key
             resp = await client.get(CPE_DICT_URL, headers=headers)
@@ -315,7 +319,7 @@ def sync_cpe_dictionary(self, use_api: bool = False):
         results_per_page = 5000
         total = None
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             while True:
                 params = {
                     "resultsPerPage": results_per_page,
@@ -378,7 +382,12 @@ def sync_cpe_dictionary(self, use_api: bool = False):
                     if use_api:
                         vendor_products = await _fetch_cpe_via_api()
                     else:
-                        vendor_products = await _fetch_cpe_via_xml()
+                        # Try XML first, fall back to API if XML feed is deprecated (403)
+                        try:
+                            vendor_products = await _fetch_cpe_via_xml()
+                        except Exception as xml_err:
+                            logger.warning(f"CPE XML feed failed ({xml_err}), falling back to API mode...")
+                            vendor_products = await _fetch_cpe_via_api()
 
                     logger.info(f"CPE sync: parsed {len(vendor_products)} unique vendor:product pairs")
 
