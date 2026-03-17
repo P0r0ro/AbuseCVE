@@ -98,6 +98,7 @@ def _task_name_to_worker_type(task_name: str) -> str:
         "app.tasks.cve_tasks.run_cve_scan": "cve_scan",
         "app.tasks.cve_tasks.sync_cpe_dictionary": "cpe_sync",
         "app.tasks.cve_tasks.enrich_cve_vendor_product": "enrichment",
+        "app.tasks.cve_tasks.cleanup_vendor_product": "cleanup",
         "app.tasks.health_tasks.generate_and_send_health_report": "health",
         "app.tasks.init_tasks.initialize_database": "init",
         "app.tasks.init_tasks.initialize_database_local": "init_local",

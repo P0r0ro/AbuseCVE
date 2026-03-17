@@ -678,3 +678,364 @@ def enrich_cve_vendor_product(self, batch_size: int = 500, use_llm: bool = False
     except Exception as exc:
         logger.error(f"CVE enrichment failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
         raise self.retry(exc=exc)
+
+
+# ── Deep Cleanup: fix inaccurate vendor/product across entire DB ─────────────
+
+# Patterns that indicate a product field contains a sentence fragment, not a name
+_BAD_PRODUCT_PATTERNS = [
+    " is a ", " is an ", " is the ", " is vulnerable",
+    " allows ", " enables ", " could allow ",
+    " was found ", " was discovered ",
+    " before version ", " prior to ",
+    " through version ", " up to ",
+    ". from ", " from %d",
+    " has a vulnerability", " has been ",
+    " plugin for wordpress",  # Should be vendor=wordpress, not in product
+    " theme for wordpress",
+    " provides ", " contains a ",
+]
+
+# Known third-party CNA reporters incorrectly set as vendors
+_BAD_VENDORS = {
+    "github", "cert_pl", "cert_vde", "vulncheck", "tenable", "rapid7",
+    "cisa", "secalert", "psirt", "security", "disclosure",
+    "n/a", "unknown", "none", "null",
+}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.cve_tasks.cleanup_vendor_product",
+    max_retries=1,
+    default_retry_delay=120,
+    acks_late=True,
+)
+def cleanup_vendor_product(self, batch_size: int = 500, use_llm: bool = False):
+    """Deep cleanup: fix ALL inaccurate vendor/product values in the database.
+
+    Phase 1 — Identify and NULL out bad data:
+      - Products that are sentence fragments (length > 60 or contain telltale phrases)
+      - Vendors that are third-party reporters (github, vulncheck, etc.)
+      - Vendors that are clearly GitHub usernames (not in Golden List, don't match product)
+      - Vendor/product pairs where vendor exists in Golden List but product doesn't
+        (suggests heuristic extracted wrong product name)
+
+    Phase 2 — Re-extract with Golden List validation:
+      - Re-run extraction on all NULLed records
+      - Only accept results that pass quality checks
+      - Use Golden List as quality gate: if vendor+product both match → accept
+      - Optionally use LLM for remaining unknowns
+
+    Phase 3 — Normalize existing good data:
+      - For CVEs with vendor/product strings that match Golden List entries,
+        ensure vendor_id/product_id FKs are set
+
+    Safe to run multiple times. Each run improves data quality.
+    """
+    logger.info(f"Starting deep vendor/product cleanup (batch={batch_size}, llm={use_llm})")
+
+    async def _cleanup():
+        import re
+        from sqlalchemy import select, update, or_, and_, asc, func, text
+        from app.models.cve import CVE
+        from app.models.vendor_product import Vendor, Product
+        from app.engine.vendor_product_extractor import extract_vendor_product
+
+        task_engine, task_session = _make_task_session()
+        try:
+            # Load Golden List into memory for fast lookups
+            async with task_session() as session:
+                vendor_rows = (await session.execute(select(Vendor.id, Vendor.name))).all()
+                vendor_set = {row[1] for row in vendor_rows}
+                vendor_map = {row[1]: row[0] for row in vendor_rows}
+
+                product_rows = (await session.execute(
+                    select(Product.id, Product.name, Product.vendor_id)
+                )).all()
+                product_map = {(row[2], row[1]): row[0] for row in product_rows}
+
+            logger.info(f"Cleanup: Golden List has {len(vendor_set)} vendors, {len(product_map)} products")
+
+            # ── Phase 1: NULL out bad data ────────────────────────────────────
+
+            nulled_vendor = 0
+            nulled_product = 0
+
+            async with task_session() as session:
+                # 1a. NULL known bad vendors
+                for bad_v in _BAD_VENDORS:
+                    result = await session.execute(
+                        update(CVE).where(CVE.vendor == bad_v)
+                        .values(vendor=None, vendor_id=None, extraction_method=None)
+                    )
+                    nulled_vendor += result.rowcount
+
+                # 1b. NULL products longer than 60 chars (sentence fragments)
+                result = await session.execute(
+                    update(CVE)
+                    .where(func.length(CVE.product) > 60)
+                    .values(product=None, product_id=None, extraction_method=None)
+                )
+                nulled_product += result.rowcount
+
+                # 1c. NULL products containing sentence patterns
+                for pattern in _BAD_PRODUCT_PATTERNS:
+                    result = await session.execute(
+                        update(CVE)
+                        .where(CVE.product.ilike(f"%{pattern}%"))
+                        .values(product=None, product_id=None, extraction_method=None)
+                    )
+                    nulled_product += result.rowcount
+
+                # 1d. NULL vendors that look like personal usernames:
+                #     - Not in Golden List
+                #     - Don't match their own product name
+                #     - Short lowercase-only strings (typical GitHub usernames)
+                _cursor = 0
+                while True:
+                    rows = (await session.execute(
+                        select(CVE.id, CVE.vendor, CVE.product)
+                        .where(
+                            and_(
+                                CVE.id > _cursor,
+                                CVE.vendor.isnot(None),
+                            )
+                        )
+                        .order_by(asc(CVE.id))
+                        .limit(2000)
+                    )).all()
+                    if not rows:
+                        break
+                    for row in rows:
+                        _cursor = row[0]
+                        v, p = row[1], row[2]
+                        if not v:
+                            continue
+                        # Skip rejected markers
+                        if v.startswith("["):
+                            continue
+                        # If vendor is in Golden List, it's legit
+                        if v.lower() in vendor_set:
+                            continue
+                        # If vendor matches product prefix, it's probably fine
+                        if p and (v == p or p.startswith(v)):
+                            continue
+                        # Otherwise NULL it — it's likely a username or bad extraction
+                        await session.execute(
+                            update(CVE).where(CVE.id == row[0])
+                            .values(vendor=None, vendor_id=None, extraction_method=None)
+                        )
+                        nulled_vendor += 1
+
+                await session.commit()
+
+            logger.info(
+                f"Cleanup Phase 1: NULLed {nulled_vendor} bad vendors, "
+                f"{nulled_product} bad products"
+            )
+
+            # ── Phase 2: Re-extract with quality validation ───────────────────
+
+            total_fixed = 0
+            total_processed = 0
+            total_llm = 0
+            last_id = 0
+
+            while True:
+                async with task_session() as session:
+                    try:
+                        result = await session.execute(
+                            select(
+                                CVE.id, CVE.cve_id, CVE.vendor, CVE.product,
+                                CVE.cpe_names, CVE.affected_products, CVE.raw_json,
+                                CVE.source, CVE.sources, CVE.description,
+                            )
+                            .where(
+                                and_(
+                                    CVE.id > last_id,
+                                    or_(CVE.vendor.is_(None), CVE.product.is_(None)),
+                                )
+                            )
+                            .order_by(asc(CVE.id))
+                            .limit(batch_size)
+                        )
+                        rows = result.all()
+                        if not rows:
+                            break
+
+                        batch_fixed = 0
+                        for row in rows:
+                            (cve_pk, cve_id, cur_vendor, cur_product,
+                             cpe_names, affected_prods, raw_json,
+                             source, sources, description) = row
+
+                            last_id = cve_pk
+                            total_processed += 1
+
+                            # Run extraction
+                            new_vendor, new_product = extract_vendor_product(
+                                vendor=cur_vendor,
+                                product=cur_product,
+                                cpe_names=cpe_names,
+                                affected_products=affected_prods,
+                                raw_json=raw_json,
+                                source=source,
+                                sources=sources,
+                                description=description,
+                            )
+
+                            method = None
+                            vendor_id = None
+                            product_id = None
+
+                            # Quality gate: validate against Golden List
+                            if new_vendor:
+                                vid = vendor_map.get(new_vendor.lower())
+                                if vid:
+                                    vendor_id = vid
+                                    method = "db_lookup"
+                                    if new_product:
+                                        pid = product_map.get((vid, new_product.lower()))
+                                        if pid:
+                                            product_id = pid
+                                elif cpe_names and new_vendor:
+                                    # CPE-derived vendors are trustworthy even if not in Golden List
+                                    method = "cpe_match"
+                                else:
+                                    # Heuristic result not in Golden List — check quality
+                                    if new_product and len(new_product) > 60:
+                                        new_product = None  # Sentence fragment
+                                    if new_vendor and new_vendor.lower() in _BAD_VENDORS:
+                                        new_vendor = None
+                                    if new_vendor:
+                                        method = "heuristic"
+
+                            # LLM fallback for completely empty results
+                            if use_llm and not new_vendor and description:
+                                if not description.startswith("Rejected reason:"):
+                                    try:
+                                        from app.services.llm_extraction_service import extract_with_llm
+                                        llm_result = await extract_with_llm(description)
+                                        if llm_result.status == "success":
+                                            if llm_result.vendor:
+                                                new_vendor = llm_result.vendor
+                                                vid = vendor_map.get(new_vendor.lower())
+                                                if vid:
+                                                    vendor_id = vid
+                                            if llm_result.product:
+                                                new_product = llm_result.product
+                                                if vendor_id:
+                                                    pid = product_map.get((vendor_id, new_product.lower()))
+                                                    if pid:
+                                                        product_id = pid
+                                            if new_vendor or new_product:
+                                                method = "llm"
+                                                total_llm += 1
+                                    except Exception:
+                                        pass
+
+                            # Build updates
+                            updates = {}
+                            if new_vendor and not cur_vendor:
+                                updates["vendor"] = new_vendor
+                            if new_product and not cur_product:
+                                updates["product"] = new_product
+                            if vendor_id:
+                                updates["vendor_id"] = vendor_id
+                            if product_id:
+                                updates["product_id"] = product_id
+                            if method:
+                                updates["extraction_method"] = method
+
+                            if updates:
+                                await session.execute(
+                                    update(CVE).where(CVE.id == cve_pk).values(**updates)
+                                )
+                                batch_fixed += 1
+
+                        await session.commit()
+                        total_fixed += batch_fixed
+                        if total_processed % 5000 == 0:
+                            logger.info(
+                                f"Cleanup Phase 2: {total_processed} processed, "
+                                f"{total_fixed} fixed, {total_llm} LLM"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"Cleanup Phase 2 error at id>{last_id}: {e}")
+                        await session.rollback()
+                        last_id += batch_size
+                        continue
+
+            logger.info(
+                f"Cleanup Phase 2 complete: {total_processed} processed, "
+                f"{total_fixed} fixed, {total_llm} LLM-assisted"
+            )
+
+            # ── Phase 3: Re-link all CVEs with valid vendor strings to Golden List ──
+
+            relinked = 0
+            last_id = 0
+            while True:
+                async with task_session() as session:
+                    try:
+                        result = await session.execute(
+                            select(CVE.id, CVE.vendor, CVE.product)
+                            .where(
+                                and_(
+                                    CVE.id > last_id,
+                                    CVE.vendor.isnot(None),
+                                    CVE.vendor_id.is_(None),
+                                )
+                            )
+                            .order_by(asc(CVE.id))
+                            .limit(batch_size)
+                        )
+                        rows = result.all()
+                        if not rows:
+                            break
+
+                        for row in rows:
+                            last_id = row[0]
+                            v, p = row[1], row[2]
+                            vid = vendor_map.get(v.lower()) if v else None
+                            if vid:
+                                upd = {"vendor_id": vid}
+                                if p:
+                                    pid = product_map.get((vid, p.lower()))
+                                    if pid:
+                                        upd["product_id"] = pid
+                                await session.execute(
+                                    update(CVE).where(CVE.id == row[0]).values(**upd)
+                                )
+                                relinked += 1
+
+                        await session.commit()
+
+                    except Exception as e:
+                        logger.error(f"Cleanup Phase 3 error at id>{last_id}: {e}")
+                        await session.rollback()
+                        last_id += batch_size
+                        continue
+
+            logger.info(f"Cleanup Phase 3: re-linked {relinked} CVEs to Golden List")
+
+            return {
+                "phase1_nulled_vendors": nulled_vendor,
+                "phase1_nulled_products": nulled_product,
+                "phase2_processed": total_processed,
+                "phase2_fixed": total_fixed,
+                "phase2_llm_used": total_llm,
+                "phase3_relinked": relinked,
+            }
+        finally:
+            await task_engine.dispose()
+
+    try:
+        result = _run_async(_cleanup())
+        logger.info(f"Deep cleanup complete: {result}")
+        return result
+    except Exception as exc:
+        logger.error(f"Deep cleanup failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+        raise self.retry(exc=exc)

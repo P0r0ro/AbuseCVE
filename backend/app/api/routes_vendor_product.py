@@ -143,6 +143,28 @@ async def trigger_enrichment(
     }
 
 
+@router.post("/cleanup")
+async def trigger_cleanup(
+    batch_size: int = Query(500, ge=100, le=2000),
+    use_llm: bool = Query(False),
+):
+    """Deep cleanup: fix ALL inaccurate vendor/product values in the database.
+
+    Phase 1: NULL out sentence fragments, bad vendors, GitHub usernames
+    Phase 2: Re-extract with Golden List quality validation
+    Phase 3: Re-link all valid vendors to Golden List FKs
+
+    Set use_llm=True to use Groq/Gemini for CVEs where heuristics fail.
+    """
+    from app.tasks.cve_tasks import cleanup_vendor_product
+    task = cleanup_vendor_product.delay(batch_size=batch_size, use_llm=use_llm)
+    return {
+        "status": "queued",
+        "task_id": task.id,
+        "message": f"Deep cleanup queued (batch={batch_size}, llm={use_llm})",
+    }
+
+
 @router.get("/llm-status")
 async def llm_extraction_status():
     """Check LLM API key configuration for vendor/product extraction."""
