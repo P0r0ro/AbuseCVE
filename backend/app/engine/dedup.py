@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.sources.base import NormalizedCVE
 from app.models.cve import CVE
+from app.models import vendor_product as _vp_models  # noqa: F401 – register Vendor/Product tables for FK resolution
 
 logger = logging.getLogger(__name__)
 
