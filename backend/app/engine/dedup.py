@@ -89,6 +89,12 @@ async def dedup_and_store(
     Returns:
         (new_cves, existing_count) - list of truly new CVEs and count of existing
     """
+    # Ensure Golden List is loaded for 4-tier extraction on new CVEs
+    from app.engine.vendor_product_extractor import (
+        load_golden_list_async, extract_vendor_product_tiered,
+    )
+    await load_golden_list_async(session)
+
     new_cves: List[NormalizedCVE] = []
     existing_count = 0
     updated_cves: List[NormalizedCVE] = []
@@ -143,10 +149,9 @@ async def dedup_and_store(
                 existing.description, cve_data.description
             )
 
-            # Update vendor/product if missing — use full extraction pipeline
-            if not existing.vendor or not existing.product:
-                from app.engine.vendor_product_extractor import extract_vendor_product
-                new_vendor, new_product = extract_vendor_product(
+            # Update vendor/product if missing — use 4-tier extraction pipeline
+            if not existing.vendor or not existing.product or not existing.vendor_id:
+                t_vendor, t_product, t_vid, t_pid, t_method = extract_vendor_product_tiered(
                     vendor=existing.vendor or cve_data.vendor,
                     product=existing.product or cve_data.product,
                     cpe_names=existing.cpe_names,
@@ -154,11 +159,16 @@ async def dedup_and_store(
                     raw_json=cve_data.raw_json or existing.raw_json,
                     source=existing.source,
                     sources=existing.sources,
+                    description=existing.description,
                 )
-                if new_vendor and not existing.vendor:
-                    existing.vendor = new_vendor
-                if new_product and not existing.product:
-                    existing.product = new_product
+                if t_vendor and not existing.vendor:
+                    existing.vendor = t_vendor
+                if t_product and not existing.product:
+                    existing.product = t_product
+                if t_vid and not existing.vendor_id:
+                    existing.vendor_id = t_vid
+                    existing.product_id = t_pid
+                    existing.extraction_method = t_method
 
             # Check if modified_date changed (for update detection)
             was_modified = False
@@ -187,11 +197,24 @@ async def dedup_and_store(
                 f"(seen {existing.seen_count}x, sources: {existing.sources})"
             )
         else:
-            # New CVE → insert
-            new_record = CVE(
-                cve_id=cve_data.cve_id,
+            # New CVE → run 4-tier extraction then insert
+            t_vendor, t_product, t_vid, t_pid, t_method = extract_vendor_product_tiered(
                 vendor=cve_data.vendor,
                 product=cve_data.product,
+                cpe_names=cve_data.cpe_names,
+                affected_products=cve_data.affected_products,
+                raw_json=cve_data.raw_json,
+                source=cve_data.source,
+                sources=cve_data.sources,
+                description=cve_data.description,
+            )
+            new_record = CVE(
+                cve_id=cve_data.cve_id,
+                vendor=t_vendor or cve_data.vendor,
+                product=t_product or cve_data.product,
+                vendor_id=t_vid,
+                product_id=t_pid,
+                extraction_method=t_method,
                 description=cve_data.description,
                 severity=cve_data.severity,
                 cvss_score=cve_data.cvss_score,
@@ -214,7 +237,10 @@ async def dedup_and_store(
             )
             session.add(new_record)
             new_cves.append(cve_data)
-            logger.debug(f"CVE {cve_data.cve_id} is NEW — queued for alert")
+            logger.debug(
+                f"CVE {cve_data.cve_id} is NEW — "
+                f"vendor={t_vendor}, product={t_product}, method={t_method}"
+            )
 
     await session.flush()
     logger.info(
