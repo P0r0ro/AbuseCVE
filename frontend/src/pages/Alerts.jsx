@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getAlerts, getAlertStats, getCVE, exportAlertsExcel } from '../api';
+import { getAlerts, getAlertStats, getCVE, exportAlertsExcel, getFilter, refineFilterRule } from '../api';
 
 const STATUS_COLORS = {
     sent: 'var(--success)',
@@ -49,6 +49,231 @@ function periodLabel(period) {
     return legacy[period] || period;
 }
 
+// ── Refine Filter Modal ─────────────────────────────────
+function RefineModal({ alert, cveDetail, onClose, onSuccess }) {
+    const [ruleData, setRuleData] = useState(null);
+    const [loadingRule, setLoadingRule] = useState(true);
+    const [keyword, setKeyword] = useState('');
+    const [productVal, setProductVal] = useState('');
+    const [versionVal, setVersionVal] = useState('');
+    const [cvssVal, setCvssVal] = useState('');
+    const [useKeyword, setUseKeyword] = useState(false);
+    const [useProduct, setUseProduct] = useState(false);
+    const [useVersion, setUseVersion] = useState(false);
+    const [useCvss, setUseCvss] = useState(false);
+    const [preview, setPreview] = useState(null);
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState(null);
+    const [success, setSuccess] = useState(false);
+
+    // Pre-fill product from CVE detail
+    useEffect(() => {
+        if (cveDetail?.product) setProductVal(cveDetail.product);
+    }, [cveDetail]);
+
+    // Load the rule that triggered this alert
+    useEffect(() => {
+        if (!alert?.filter_rule_id) {
+            setLoadingRule(false);
+            return;
+        }
+        (async () => {
+            try {
+                const r = await getFilter(alert.filter_rule_id);
+                setRuleData(r);
+            } catch (e) {
+                setError(`Could not load rule: ${e.message}`);
+            } finally {
+                setLoadingRule(false);
+            }
+        })();
+    }, [alert]);
+
+    const buildNegations = () => {
+        const negs = [];
+        if (useKeyword && keyword.trim()) negs.push({ type: 'keyword', value: keyword.trim() });
+        if (useProduct && productVal.trim()) negs.push({ type: 'product', value: productVal.trim() });
+        if (useVersion && versionVal.trim()) negs.push({ type: 'version', value: versionVal.trim() });
+        if (useCvss && cvssVal.trim()) negs.push({ type: 'cvss', value: cvssVal.trim() });
+        return negs;
+    };
+
+    const handlePreview = async () => {
+        const negations = buildNegations();
+        if (!negations.length) { setError('Select at least one negation criterion.'); return; }
+        setError(null);
+        setSubmitting(true);
+        try {
+            const res = await refineFilterRule({
+                rule_id: alert.filter_rule_id,
+                negations,
+                preview_only: true,
+            });
+            setPreview(res);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleApply = async () => {
+        const negations = buildNegations();
+        if (!negations.length) { setError('Select at least one negation criterion.'); return; }
+        setError(null);
+        setSubmitting(true);
+        try {
+            await refineFilterRule({
+                rule_id: alert.filter_rule_id,
+                negations,
+                preview_only: false,
+            });
+            setSuccess(true);
+            setTimeout(() => { onSuccess?.(); onClose(); }, 1500);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const overlayStyle = {
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.6)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+    };
+    const modalStyle = {
+        background: 'var(--card-bg)', border: '1px solid var(--border)',
+        borderRadius: 12, padding: 24, width: '90%', maxWidth: 680,
+        maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+    };
+    const sectionStyle = {
+        padding: '10px 14px', marginBottom: 10, borderRadius: 8,
+        background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)',
+    };
+    const checkRow = {
+        display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+    };
+    const inputStyle = {
+        flex: 1, padding: '6px 10px', fontSize: 13,
+        background: 'var(--card-bg)', border: '1px solid var(--border)',
+        color: 'var(--text-primary)', borderRadius: 6,
+    };
+
+    return (
+        <div style={overlayStyle} onClick={onClose}>
+            <div style={modalStyle} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <h2 style={{ margin: 0, fontSize: 18 }}>Refine Filter — Reduce False Positives</h2>
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 20, cursor: 'pointer' }}>✕</button>
+                </div>
+
+                {/* Target info */}
+                <div style={sectionStyle}>
+                    <div className="text-sm"><strong>Alert CVE:</strong> {alert.cve_id}</div>
+                    <div className="text-sm"><strong>Triggered by Rule:</strong> {alert.rule_name || '—'} (ID: {alert.filter_rule_id || '—'})</div>
+                    {cveDetail && (
+                        <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                            {(cveDetail.description || '').slice(0, 200)}{(cveDetail.description || '').length > 200 ? '...' : ''}
+                        </div>
+                    )}
+                </div>
+
+                {loadingRule ? (
+                    <div className="loading" style={{ padding: 20 }}><div className="loading-spinner" />Loading rule...</div>
+                ) : !alert.filter_rule_id ? (
+                    <div className="text-sm text-muted" style={{ padding: 20, textAlign: 'center' }}>
+                        This alert has no associated rule ID. Cannot refine.
+                    </div>
+                ) : (
+                    <>
+                        {/* Current PQL */}
+                        {ruleData && (
+                            <div style={{ ...sectionStyle, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>
+                                <div className="text-xs text-muted" style={{ marginBottom: 4 }}>Current PQL:</div>
+                                {ruleData.pql || '(none)'}
+                            </div>
+                        )}
+
+                        {/* Negation options */}
+                        <div style={{ marginBottom: 16 }}>
+                            <div className="text-sm" style={{ fontWeight: 600, marginBottom: 8 }}>Negation Criteria:</div>
+
+                            <div style={checkRow}>
+                                <input type="checkbox" checked={useKeyword} onChange={e => setUseKeyword(e.target.checked)} id="neg-kw" />
+                                <label htmlFor="neg-kw" className="text-sm" style={{ whiteSpace: 'nowrap' }}>Exclude keyword in description:</label>
+                                <input style={inputStyle} placeholder="e.g. print spooler, legacy version"
+                                    value={keyword} onChange={e => setKeyword(e.target.value)} disabled={!useKeyword} />
+                            </div>
+
+                            <div style={checkRow}>
+                                <input type="checkbox" checked={useProduct} onChange={e => setUseProduct(e.target.checked)} id="neg-prod" />
+                                <label htmlFor="neg-prod" className="text-sm" style={{ whiteSpace: 'nowrap' }}>Exclude product:</label>
+                                <input style={inputStyle} placeholder="e.g. FortiSwitch"
+                                    value={productVal} onChange={e => setProductVal(e.target.value)} disabled={!useProduct} />
+                            </div>
+
+                            <div style={checkRow}>
+                                <input type="checkbox" checked={useVersion} onChange={e => setUseVersion(e.target.checked)} id="neg-ver" />
+                                <label htmlFor="neg-ver" className="text-sm" style={{ whiteSpace: 'nowrap' }}>Exclude version string:</label>
+                                <input style={inputStyle} placeholder="e.g. 6.4.0, before 7.2"
+                                    value={versionVal} onChange={e => setVersionVal(e.target.value)} disabled={!useVersion} />
+                            </div>
+
+                            <div style={checkRow}>
+                                <input type="checkbox" checked={useCvss} onChange={e => setUseCvss(e.target.checked)} id="neg-cvss" />
+                                <label htmlFor="neg-cvss" className="text-sm" style={{ whiteSpace: 'nowrap' }}>Only alert if CVSS &ge;:</label>
+                                <input style={{ ...inputStyle, maxWidth: 80 }} type="number" step="0.1" min="0" max="10"
+                                    placeholder="7.0" value={cvssVal} onChange={e => setCvssVal(e.target.value)} disabled={!useCvss} />
+                            </div>
+                        </div>
+
+                        {/* Preview */}
+                        {preview && (
+                            <div style={{ marginBottom: 16 }}>
+                                <div className="text-sm" style={{ fontWeight: 600, marginBottom: 6 }}>Before vs. After:</div>
+                                <div style={{ ...sectionStyle, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                                    <div className="text-xs text-muted" style={{ marginBottom: 2 }}>BEFORE:</div>
+                                    <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{preview.original_pql}</code>
+                                </div>
+                                <div style={{ ...sectionStyle, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                                    <div className="text-xs text-muted" style={{ marginBottom: 2 }}>AFTER:</div>
+                                    <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{preview.refined_pql}</code>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Error / Success */}
+                        {error && (
+                            <div style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--error)', fontSize: 13 }}>
+                                {error}
+                            </div>
+                        )}
+                        {success && (
+                            <div style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: 'var(--success)', fontSize: 13 }}>
+                                Rule refined successfully! Reloading...
+                            </div>
+                        )}
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
+                            <button className="btn btn-secondary" onClick={handlePreview} disabled={submitting || success}>
+                                {submitting && !preview ? 'Loading...' : 'Preview'}
+                            </button>
+                            <button className="btn btn-primary" onClick={handleApply}
+                                disabled={submitting || success || !buildNegations().length}>
+                                {submitting ? 'Applying...' : 'Apply Refinement'}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+
 export default function Alerts() {
     const [alerts, setAlerts] = useState([]);
     const [stats, setStats] = useState({});
@@ -61,6 +286,10 @@ export default function Alerts() {
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [exporting, setExporting] = useState(false);
+
+    // Refine modal state
+    const [refineAlert, setRefineAlert] = useState(null);
+    const [refineCveDetail, setRefineCveDetail] = useState(null);
 
     // Filters
     const [period, setPeriod] = useState('1d');
@@ -155,6 +384,17 @@ export default function Alerts() {
             alert('Export failed: ' + e.message);
         } finally {
             setExporting(false);
+        }
+    };
+
+    const handleOpenRefine = async (a) => {
+        setRefineAlert(a);
+        // Load CVE detail for pre-filling the modal
+        try {
+            const d = await getCVE(a.cve_id);
+            setRefineCveDetail(d);
+        } catch {
+            setRefineCveDetail(null);
         }
     };
 
@@ -362,6 +602,7 @@ export default function Alerts() {
                                     <th>Sent At</th>
                                     <th>Recipient</th>
                                     <th>Error</th>
+                                    <th style={{ width: 90 }}>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -403,10 +644,22 @@ export default function Alerts() {
                                             <td className="text-sm text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {a.error_message || '—'}
                                             </td>
+                                            <td>
+                                                {a.filter_rule_id && (
+                                                    <button
+                                                        className="btn btn-secondary"
+                                                        style={{ padding: '2px 8px', fontSize: 11 }}
+                                                        onClick={(e) => { e.stopPropagation(); handleOpenRefine(a); }}
+                                                        title="Refine this rule to reduce false positives"
+                                                    >
+                                                        Refine
+                                                    </button>
+                                                )}
+                                            </td>
                                         </tr>
                                         {expandedCve === a.cve_id && (
                                             <tr>
-                                                <td colSpan="7" style={{ padding: 0, border: 'none' }}>
+                                                <td colSpan="8" style={{ padding: 0, border: 'none' }}>
                                                     <div style={{ padding: '12px 24px', background: 'rgba(124,58,237,0.05)', borderLeft: '3px solid var(--purple-400)', animation: 'slideDown 0.2s ease' }}>
                                                         {loadingDetail ? (
                                                             <div className="loading"><div className="loading-spinner" style={{ width: 14, height: 14 }} />Loading...</div>
@@ -435,7 +688,7 @@ export default function Alerts() {
                                     </React.Fragment>
                                 ))}
                                 {alerts.length === 0 && (
-                                    <tr><td colSpan="7" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
+                                    <tr><td colSpan="8" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>
                                         {(status || isNew || pql) ? 'No alerts match the current filters.' : `No alerts for ${currentPeriodLabel.toLowerCase()}.`}
                                     </td></tr>
                                 )}
@@ -453,6 +706,16 @@ export default function Alerts() {
                     </div>
                 )}
             </div>
+
+            {/* Refine Filter Modal */}
+            {refineAlert && (
+                <RefineModal
+                    alert={refineAlert}
+                    cveDetail={refineCveDetail}
+                    onClose={() => { setRefineAlert(null); setRefineCveDetail(null); }}
+                    onSuccess={() => fetchAlerts(true)}
+                />
+            )}
         </div>
     );
 }

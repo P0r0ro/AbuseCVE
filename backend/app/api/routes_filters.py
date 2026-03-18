@@ -1,21 +1,24 @@
-"""Filter rules API routes – read-only (Wazuh-style file-based rules).
+"""Filter rules API routes – file-based rules (Wazuh-style).
 
 Rules are loaded from abusecve_filters.yaml on disk.
 Edit the file directly on the server and call POST /api/filters/reload.
+Includes the Rule Refinement Wizard endpoint for FP mitigation from Alerts.
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
 import time
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import List, Optional
 from sqlalchemy import select as sa_select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.engine.rule_loader import get_rules, get_rule_by_id, reload_rules
+from app.engine.rule_loader import get_rules, get_rule_by_id, reload_rules, get_rules_path
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,19 @@ class TestFilterRequest(BaseModel):
     pql: Optional[str] = None
     send_test_alert: bool = False
     limit: int = Field(default=0, ge=0, description="Max CVEs to return (0 = all)")
+
+
+class Negation(BaseModel):
+    """A single negation criterion for the refinement wizard."""
+    type: str  # "keyword", "product", "version", "cvss"
+    value: str  # The keyword/product/version string, or CVSS threshold
+
+
+class RefineFilterRequest(BaseModel):
+    """Refine a rule by appending negation logic to its PQL."""
+    rule_id: int
+    negations: List[Negation]
+    preview_only: bool = Field(default=False, description="If true, return before/after without saving")
 
 
 # ══════════════════════════════════════════════════════════
@@ -234,6 +250,175 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
         "elapsed_seconds": elapsed,
         "matched_cves": returned,
         **({"test_alert": test_alert_result} if test_alert_result else {}),
+    }
+
+
+@router.post("/refine")
+async def refine_filter_rule(data: RefineFilterRequest):
+    """Refine a rule by appending AND NOT negation logic to its PQL.
+
+    Used by the Rule Refinement Wizard to mitigate false positives.
+    Creates a backup of the YAML before writing. If validation fails,
+    the backup is restored automatically.
+    """
+    from app.engine.query_engine import parse_pql_to_conditions
+
+    # 1. Find the rule
+    rule = get_rule_by_id(data.rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule ID {data.rule_id} not found")
+
+    original_pql = rule.get("pql", "").strip()
+    if not original_pql:
+        raise HTTPException(status_code=400, detail="Rule has no PQL to refine")
+
+    if not data.negations:
+        raise HTTPException(status_code=400, detail="No negation criteria provided")
+
+    # 2. Build the negation clause(s)
+    negation_parts = []
+    for neg in data.negations:
+        val = neg.value.strip()
+        if not val:
+            continue
+        if neg.type == "keyword":
+            negation_parts.append(f'description:"{val}"')
+        elif neg.type == "product":
+            negation_parts.append(f'product:"{val}"')
+        elif neg.type == "version":
+            negation_parts.append(f'description:"{val}"')
+        elif neg.type == "cvss":
+            # CVSS threshold: keep only CVEs >= threshold (not a NOT, it's a floor)
+            pass
+        else:
+            continue
+
+    # Build the new PQL
+    new_pql = original_pql
+
+    # Append NOT clauses
+    if negation_parts:
+        not_clause = " OR ".join(negation_parts)
+        if len(negation_parts) > 1:
+            not_clause = f"({not_clause})"
+        new_pql = f"({new_pql}) AND NOT ({not_clause})"
+
+    # Append CVSS threshold (if any)
+    cvss_negations = [n for n in data.negations if n.type == "cvss"]
+    if cvss_negations:
+        threshold = cvss_negations[0].value.strip()
+        try:
+            float(threshold)
+            new_pql = f"({new_pql}) AND (cvss:>={threshold})"
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid CVSS threshold: {threshold}")
+
+    # 3. Validate the new PQL parses correctly
+    try:
+        parse_pql_to_conditions(new_pql)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Generated PQL is invalid: {exc}")
+
+    # 4. Preview mode — return before/after without saving
+    if data.preview_only:
+        return {
+            "status": "preview",
+            "rule_id": data.rule_id,
+            "rule_name": rule["name"],
+            "original_pql": original_pql,
+            "refined_pql": new_pql,
+        }
+
+    # 5. Write to YAML (using ruamel.yaml to preserve comments)
+    rules_path = get_rules_path()
+    if not rules_path.exists():
+        raise HTTPException(status_code=500, detail=f"Rules file not found: {rules_path}")
+
+    # Create backup
+    backup_path = rules_path.with_suffix(
+        f".bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    shutil.copy2(rules_path, backup_path)
+    logger.info(f"Refine: backed up rules to {backup_path}")
+
+    try:
+        from ruamel.yaml import YAML
+
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.width = 4096  # prevent line wrapping
+
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            doc = yaml.load(fh)
+
+        # Find and update the rule in the YAML document
+        rules_list = doc.get("rules") or doc.get("filter_rules") or []
+        updated = False
+        for r in rules_list:
+            if r.get("id") == data.rule_id:
+                r["pql"] = new_pql
+                updated = True
+                break
+
+        if not updated:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rule ID {data.rule_id} not found in YAML file"
+            )
+
+        with open(rules_path, "w", encoding="utf-8") as fh:
+            yaml.dump(doc, fh)
+
+        logger.info(f"Refine: updated rule {data.rule_id} PQL in {rules_path}")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Restore backup on any write error
+        logger.error(f"Refine: write failed, restoring backup: {exc}")
+        shutil.copy2(backup_path, rules_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update YAML file: {exc}. Backup restored."
+        )
+
+    # 6. Validate the saved file loads correctly
+    try:
+        reloaded = reload_rules()
+        reloaded_rule = None
+        for r in reloaded:
+            if r["id"] == data.rule_id:
+                reloaded_rule = r
+                break
+
+        if reloaded_rule and not reloaded_rule.get("enabled"):
+            # Rule got disabled during reload = PQL parse error
+            logger.error("Refine: reloaded rule is disabled (PQL error), reverting")
+            shutil.copy2(backup_path, rules_path)
+            reload_rules()
+            raise HTTPException(
+                status_code=500,
+                detail="Rule was disabled after reload (PQL error). Reverted to backup."
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Refine: reload failed, restoring backup: {exc}")
+        shutil.copy2(backup_path, rules_path)
+        reload_rules()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reload failed after update: {exc}. Backup restored."
+        )
+
+    logger.info(f"Refine: rule {data.rule_id} successfully refined and reloaded")
+    return {
+        "status": "ok",
+        "rule_id": data.rule_id,
+        "rule_name": rule["name"],
+        "original_pql": original_pql,
+        "refined_pql": new_pql,
+        "backup_path": str(backup_path),
     }
 
 

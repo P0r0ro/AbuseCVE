@@ -35,3 +35,4 @@ openpyxl==3.1.5
 
 # YAML support
 pyyaml==6.0.2
+ruamel.yaml==0.18.6

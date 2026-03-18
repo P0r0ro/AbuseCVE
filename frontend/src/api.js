@@ -45,12 +45,13 @@ export const initializeDBLocal = (mitreDir, nvdDir) =>
 export const triggerScan = () => request('/dashboard/trigger-scan', { method: 'POST' });
 export const getTaskStatus = (taskId) => request(`/dashboard/task-status/${taskId}`);
 
-// ── Filters (read-only, file-based rules) ───
+// ── Filters (file-based rules) ──────────────
 export const getFilters = () => request('/filters');
 export const getFilter = (id) => request(`/filters/${id}`);
 export const testFilterRule = (data) => request('/filters/test', { method: 'POST', body: data });
 export const reloadFilterRules = () => request('/filters/reload', { method: 'POST' });
 export const getQueryHelp = () => request('/filters/query-help');
+export const refineFilterRule = (data) => request('/filters/refine', { method: 'POST', body: data });
 
 // ── CVEs ─────────────────────────────────────
 export const getCVEs = (params = {}) => {
