@@ -91,13 +91,14 @@ export default function RefineModal({ ruleId, ruleName, cveId, cveDetail, onClos
 
     const overlayStyle = {
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-        background: 'rgba(0,0,0,0.6)', zIndex: 1000,
+        background: 'rgba(0,0,0,0.92)', zIndex: 1000,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backdropFilter: 'blur(6px)',
     };
     const modalStyle = {
-        background: 'var(--card-bg)', border: '1px solid var(--border)',
+        background: 'var(--bg, #1a1a2e)', border: '1px solid rgba(124,58,237,0.4)',
         borderRadius: 12, padding: 24, width: '90%', maxWidth: 680,
-        maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+        maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)',
     };
     const sectionStyle = {
         padding: '10px 14px', marginBottom: 10, borderRadius: 8,
