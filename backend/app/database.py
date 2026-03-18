@@ -65,6 +65,14 @@ async def init_db():
             # AlertLog new columns
             ("alert_logs", "rule_name", "VARCHAR(255)"),
             ("alert_logs", "is_new_cve", "BOOLEAN"),
+            # KnowledgeArticle new columns (wizard-based reports)
+            ("knowledge_articles", "report_data", "JSONB"),
+            ("knowledge_articles", "is_batch", "BOOLEAN DEFAULT FALSE"),
+            ("knowledge_articles", "poc_available", "BOOLEAN DEFAULT FALSE"),
+            ("knowledge_articles", "user_interaction", "BOOLEAN DEFAULT FALSE"),
+            ("knowledge_articles", "categories", "JSONB"),
+            ("knowledge_articles", "references", "JSONB"),
+            ("knowledge_articles", "mitigation", "TEXT"),
         ]
 
         from sqlalchemy import text

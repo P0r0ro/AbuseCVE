@@ -83,24 +83,16 @@ export const getKA = (id) => request(`/knowledge-articles/${id}`);
 export const createKA = (data) => request('/knowledge-articles', { method: 'POST', body: data });
 export const updateKA = (id, data) => request(`/knowledge-articles/${id}`, { method: 'PUT', body: data });
 export const deleteKA = (id) => request(`/knowledge-articles/${id}`, { method: 'DELETE' });
-export const generateKA = (cveId, aiProvider = 'auto') =>
-    request(`/knowledge-articles/generate/${cveId}`, {
-        method: 'POST',
-        body: { ai_provider: aiProvider },
-    });
-export const getAIStatus = () => request('/knowledge-articles/ai-status');
-export const generateBatchKA = (cveIds, aiProvider = 'auto') =>
-    request('/knowledge-articles/generate-batch', {
-        method: 'POST',
-        body: { cve_ids: cveIds, ai_provider: aiProvider },
-    });
+export const previewKA = (data) => request('/knowledge-articles/preview', { method: 'POST', body: data });
+export const lookupCVEs = (cveIds) =>
+    request('/knowledge-articles/lookup-cves', { method: 'POST', body: { cve_ids: cveIds } });
 export const exportKA = async (kaId) => {
     const res = await requestRaw(`/knowledge-articles/${kaId}/export`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `KA_${kaId}.txt`;
+    a.download = `KA_${kaId}.html`;
     a.click();
     URL.revokeObjectURL(url);
 };

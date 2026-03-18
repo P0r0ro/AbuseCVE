@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getCVEs, generateKA, searchCVEsByPQL, getQueryHelp, exportCVEsExcel } from '../api';
+import { useNavigate } from 'react-router-dom';
+import { getCVEs, searchCVEsByPQL, getQueryHelp, exportCVEsExcel } from '../api';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -9,6 +10,7 @@ const sourceColors = {
 };
 
 export default function CVEDatabase() {
+    const navigate = useNavigate();
     const [cves, setCves] = useState([]);
     const [total, setTotal] = useState(0);
     const [pages, setPages] = useState(1);
@@ -19,7 +21,7 @@ export default function CVEDatabase() {
         sort_by: 'published_date', sort_order: 'desc',
     });
     const [selected, setSelected] = useState(null);
-    const [genStatus, setGenStatus] = useState('');
+    const [selectedCves, setSelectedCves] = useState(new Set());
     const [pqlQuery, setPqlQuery] = useState('');
     const [showHelp, setShowHelp] = useState(false);
     const [queryHelp, setQueryHelp] = useState(null);
@@ -41,14 +43,18 @@ export default function CVEDatabase() {
 
     const updateParam = (key, val) => setParams(p => ({ ...p, [key]: val, page: 1 }));
 
-    const handleGenerateKA = async (cveId) => {
-        setGenStatus(`Generating report for ${cveId}...`);
-        try {
-            await generateKA(cveId, 'auto');
-            setGenStatus(`✅ Report generated for ${cveId}!`);
-        } catch (e) {
-            setGenStatus(`❌ Generation failed: ${e.message}`);
-        }
+    const toggleCveSelection = (cveId) => {
+        setSelectedCves(prev => {
+            const next = new Set(prev);
+            if (next.has(cveId)) next.delete(cveId);
+            else next.add(cveId);
+            return next;
+        });
+    };
+
+    const goToKAWizard = (cveIdOrIds) => {
+        const ids = Array.isArray(cveIdOrIds) ? cveIdOrIds : [cveIdOrIds];
+        navigate('/knowledge', { state: { selectedCveIds: ids } });
     };
 
     const handleExport = async (mode) => {
@@ -115,11 +121,21 @@ export default function CVEDatabase() {
                 </div>
             </div>
 
-            {genStatus && (
-                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: genStatus.includes('✅') ? 'var(--success)' : genStatus.includes('❌') ? 'var(--error)' : 'var(--border-accent)' }}>
-                    <span className="text-sm">{genStatus}</span>
-                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-                        onClick={() => setGenStatus('')}>✕</button>
+            {/* Batch selection bar */}
+            {selectedCves.size > 0 && (
+                <div className="card mb-20" style={{
+                    padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12,
+                    borderColor: 'var(--border-accent)', background: 'rgba(124,58,237,0.05)',
+                }}>
+                    <span className="text-sm" style={{ color: 'var(--purple-400)', fontWeight: 600 }}>
+                        {selectedCves.size} CVE(s) selected
+                    </span>
+                    <button className="btn btn-primary btn-sm" onClick={() => goToKAWizard(Array.from(selectedCves))}>
+                        Generate KA
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setSelectedCves(new Set())}>
+                        Clear Selection
+                    </button>
                 </div>
             )}
 
@@ -252,6 +268,15 @@ export default function CVEDatabase() {
                     <table>
                         <thead>
                             <tr>
+                                <th style={{ width: 36 }}>
+                                    <input type="checkbox"
+                                        checked={cves.length > 0 && selectedCves.size === cves.length}
+                                        onChange={() => {
+                                            if (selectedCves.size === cves.length) setSelectedCves(new Set());
+                                            else setSelectedCves(new Set(cves.map(c => c.cve_id)));
+                                        }}
+                                        title="Select All" />
+                                </th>
                                 <th>CVE ID</th>
                                 <th>Vendor</th>
                                 <th>Product</th>
@@ -265,7 +290,12 @@ export default function CVEDatabase() {
                         </thead>
                         <tbody>
                             {cves.map(cve => (
-                                <tr key={cve.cve_id}>
+                                <tr key={cve.cve_id} style={{ background: selectedCves.has(cve.cve_id) ? 'rgba(124,58,237,0.06)' : undefined }}>
+                                    <td>
+                                        <input type="checkbox"
+                                            checked={selectedCves.has(cve.cve_id)}
+                                            onChange={() => toggleCveSelection(cve.cve_id)} />
+                                    </td>
                                     <td className="text-mono" style={{ color: 'var(--purple-400)', cursor: 'pointer' }}
                                         onClick={() => setSelected(cve)}>{cve.cve_id}</td>
                                     <td>{cve.vendor || '—'}</td>
@@ -281,17 +311,17 @@ export default function CVEDatabase() {
                                             {cve.source || '—'}
                                         </span>
                                     </td>
-                                    <td>{cve.kev_flag ? <span className="badge badge-kev">⚠ KEV</span> : '—'}</td>
+                                    <td>{cve.kev_flag ? <span className="badge badge-kev">KEV</span> : '—'}</td>
                                     <td className="text-sm text-muted">{cve.published_date ? new Date(cve.published_date).toLocaleDateString() : '—'}</td>
                                     <td>
                                         <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }}
-                                            onClick={() => handleGenerateKA(cve.cve_id)}
-                                            title="Generate Knowledge Article">📝 KA</button>
+                                            onClick={() => goToKAWizard(cve.cve_id)}
+                                            title="Create Knowledge Article">KA</button>
                                     </td>
                                 </tr>
                             ))}
                             {!loading && cves.length === 0 && (
-                                <tr><td colSpan="9" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No CVEs match your criteria.</td></tr>
+                                <tr><td colSpan="10" className="text-muted" style={{ textAlign: 'center', padding: 40 }}>No CVEs match your criteria.</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -378,8 +408,8 @@ export default function CVEDatabase() {
 
                         <div style={{ display: 'flex', gap: 8 }}>
                             <button className="btn btn-primary" style={{ padding: '6px 16px', fontSize: 13 }}
-                                onClick={() => handleGenerateKA(selected.cve_id)}>
-                                📝 Generate KA
+                                onClick={() => goToKAWizard(selected.cve_id)}>
+                                Create KA
                             </button>
                         </div>
                     </div>
