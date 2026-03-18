@@ -77,6 +77,8 @@ async def init_db():
 
         from sqlalchemy import text
         for table, column, col_type in migrations:
+            # Quote column name in DDL to handle reserved words like "references"
+            quoted_col = f'"{column}"'
             stmt = text(f"""
                 DO $$
                 BEGIN
@@ -84,7 +86,7 @@ async def init_db():
                         SELECT 1 FROM information_schema.columns
                         WHERE table_name = '{table}' AND column_name = '{column}'
                     ) THEN
-                        ALTER TABLE {table} ADD COLUMN {column} {col_type};
+                        ALTER TABLE {table} ADD COLUMN {quoted_col} {col_type};
                         RAISE NOTICE 'Added column %.% ', '{table}', '{column}';
                     END IF;
                 END $$;
