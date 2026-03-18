@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getFilters, testFilterRule, reloadFilterRules, getQueryHelp } from '../api';
+import RefineModal from '../components/RefineModal';
 
 export default function Filters() {
     const [rules, setRules] = useState([]);
@@ -13,6 +14,7 @@ export default function Filters() {
     const [adHocPql, setAdHocPql] = useState('');
     const [adHocResult, setAdHocResult] = useState(null);
     const [adHocTesting, setAdHocTesting] = useState(false);
+    const [refineRule, setRefineRule] = useState(null);
 
     const fetchRules = async () => {
         try {
@@ -197,13 +199,22 @@ export default function Filters() {
                                         </td>
                                         <td>{r.alert_on_modified ? 'Yes' : '\u2014'}</td>
                                         <td>
-                                            <button
-                                                className="btn btn-secondary"
-                                                style={{ padding: '4px 12px', fontSize: 12, color: 'var(--purple-400)' }}
-                                                disabled={testingId === r.id}
-                                                onClick={(e) => { e.stopPropagation(); handleTest(r.id); }}>
-                                                {testingId === r.id ? 'Testing...' : 'Test'}
-                                            </button>
+                                            <div style={{ display: 'flex', gap: 4 }}>
+                                                <button
+                                                    className="btn btn-secondary"
+                                                    style={{ padding: '4px 12px', fontSize: 12, color: 'var(--purple-400)' }}
+                                                    disabled={testingId === r.id}
+                                                    onClick={(e) => { e.stopPropagation(); handleTest(r.id); }}>
+                                                    {testingId === r.id ? 'Testing...' : 'Test'}
+                                                </button>
+                                                <button
+                                                    className="btn btn-secondary"
+                                                    style={{ padding: '4px 10px', fontSize: 12 }}
+                                                    onClick={(e) => { e.stopPropagation(); setRefineRule(r); }}
+                                                    title="Refine this rule to reduce false positives">
+                                                    Refine
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                     {/* Expanded detail row */}
@@ -295,6 +306,16 @@ export default function Filters() {
                     </table>
                 </div>
             </div>
+
+            {/* Refine Filter Modal */}
+            {refineRule && (
+                <RefineModal
+                    ruleId={refineRule.id}
+                    ruleName={refineRule.name}
+                    onClose={() => setRefineRule(null)}
+                    onSuccess={() => { fetchRules(); setRefineRule(null); }}
+                />
+            )}
 
             {/* PQL Help Modal */}
             {showHelp && (
