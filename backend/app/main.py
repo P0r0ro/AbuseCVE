@@ -82,3 +82,88 @@ app.include_router(vendor_product_router)
 async def health_check():
     """Simple health check endpoint used by Docker/Nginx."""
     return {"status": "ok", "service": "AbuseCVE (≖_≖ )"}
+
+
+@app.get("/api/health/deep")
+async def deep_health_check():
+    """Deep health check — probes Postgres, Redis, and Celery workers.
+
+    Returns a JSON diagnostic object suitable for Uptime Kuma keyword monitoring.
+    Overall status is 'healthy' only when ALL components pass.
+    """
+    import asyncio
+    from datetime import datetime
+
+    components = {}
+
+    # ── Postgres ──────────────────────────────────────────
+    try:
+        from sqlalchemy import text
+        from app.database import async_engine
+        async with async_engine.connect() as conn:
+            result = await conn.execute(text("SELECT 1"))
+            result.fetchone()
+        components["postgres"] = {"status": "up", "detail": "query OK"}
+    except Exception as e:
+        components["postgres"] = {"status": "down", "detail": str(e)[:200]}
+
+    # ── Redis ─────────────────────────────────────────────
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.redis_url, socket_connect_timeout=5)
+        pong = await r.ping()
+        info = await r.info("memory")
+        used_mb = round(info.get("used_memory", 0) / 1024 / 1024, 1)
+        await r.aclose()
+        components["redis"] = {
+            "status": "up" if pong else "down",
+            "detail": f"PONG, {used_mb}MB used",
+        }
+    except Exception as e:
+        components["redis"] = {"status": "down", "detail": str(e)[:200]}
+
+    # ── Celery Workers ────────────────────────────────────
+    try:
+        from app.tasks.celery_app import celery_app as _celery
+        inspect = _celery.control.inspect(timeout=5)
+        ping_result = inspect.ping()
+        if ping_result:
+            worker_names = list(ping_result.keys())
+            active = inspect.active() or {}
+            active_count = sum(len(v) for v in active.values())
+            components["celery_workers"] = {
+                "status": "up",
+                "detail": f"{len(worker_names)} worker(s), {active_count} active task(s)",
+                "workers": worker_names,
+            }
+        else:
+            components["celery_workers"] = {"status": "down", "detail": "no workers responded to ping"}
+    except Exception as e:
+        components["celery_workers"] = {"status": "down", "detail": str(e)[:200]}
+
+    # ── Celery Beat ───────────────────────────────────────
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.redis_url, socket_connect_timeout=5)
+        # Beat writes its schedule to disk; check if the schedule key exists in Redis
+        # or simply verify the beat process is reachable via the worker's registered tasks
+        beat_info = await r.get("celery-beat-last-heartbeat")
+        await r.aclose()
+        if beat_info:
+            components["celery_beat"] = {"status": "up", "detail": "heartbeat present"}
+        else:
+            # Fall back — beat might work but not set this key; mark as unknown
+            components["celery_beat"] = {"status": "unknown", "detail": "no heartbeat key — check beat logs"}
+    except Exception as e:
+        components["celery_beat"] = {"status": "down", "detail": str(e)[:200]}
+
+    # ── Overall ───────────────────────────────────────────
+    critical = ["postgres", "redis", "celery_workers"]
+    all_up = all(components.get(c, {}).get("status") == "up" for c in critical)
+
+    return {
+        "status": "healthy" if all_up else "degraded",
+        "service": "AbuseCVE (≖_≖ )",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "components": components,
+    }

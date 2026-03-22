@@ -24,7 +24,7 @@ const navItems = [
 
 export default function App() {
     return (
-        <BrowserRouter>
+        <BrowserRouter basename="/cve">
             <div className="app-layout">
                 {/* Sidebar */}
                 <aside className="sidebar">
