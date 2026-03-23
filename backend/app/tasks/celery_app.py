@@ -74,6 +74,10 @@ celery_app.conf.update(
             "task": "app.tasks.cve_tasks.sync_cpe_dictionary",
             "schedule": crontab(hour=3, minute=0, day_of_week=0),  # Sunday 03:00 UTC
         },
+        "worker-heartbeat-kuma": {
+            "task": "app.tasks.health_tasks.kuma_worker_heartbeat",
+            "schedule": 90,  # Every 90s (under Kuma's 120s threshold)
+        },
     },
 )
 

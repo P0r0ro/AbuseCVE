@@ -67,3 +67,23 @@ def generate_and_send_health_report(self):
     except Exception as exc:
         logger.error(f"Health report task failed: {exc}")
         raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="app.tasks.health_tasks.kuma_worker_heartbeat",
+    ignore_result=True,
+)
+def kuma_worker_heartbeat():
+    """Push heartbeat to Uptime Kuma — proves the worker + beat are alive."""
+    import os
+    import urllib.request
+
+    url = os.environ.get("KUMA_PUSH_URL", "")
+    if not url:
+        return "no KUMA_PUSH_URL configured"
+    try:
+        urllib.request.urlopen(url, timeout=10)
+        return "heartbeat sent"
+    except Exception as e:
+        logger.warning(f"Kuma heartbeat failed: {e}")
+        return f"heartbeat failed: {e}"
