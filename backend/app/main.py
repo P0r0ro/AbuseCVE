@@ -99,8 +99,8 @@ async def deep_health_check():
     # ── Postgres ──────────────────────────────────────────
     try:
         from sqlalchemy import text
-        from app.database import async_engine
-        async with async_engine.connect() as conn:
+        from app.database import engine
+        async with engine.connect() as conn:
             result = await conn.execute(text("SELECT 1"))
             result.fetchone()
         components["postgres"] = {"status": "up", "detail": "query OK"}
