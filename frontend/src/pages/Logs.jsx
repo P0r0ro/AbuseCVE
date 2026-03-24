@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { getLogs, getWorkerTypes, clearLogs, getRedisInfo, getSchedule } from '../api';
+import { Terminal, Trash2, RefreshCw, FileText, CircleDot, Clock, Search, XCircle, Key, Shield, HardDrive, Settings, BarChart3, AlertTriangle } from 'lucide-react';
 
 const LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
 const LEVEL_COLORS = {
@@ -71,7 +72,7 @@ export default function Logs() {
         <div className="main-content animate-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <div>
-                    <h1 className="header-title">📜 Logs &amp; Diagnostics</h1>
+                    <h1 className="header-title">Logs &amp; Diagnostics</h1>
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>Monitor worker activity and inspect the Redis pipeline pool</p>
                 </div>
                 {activeTab === 'logs' && (
@@ -82,13 +83,13 @@ export default function Logs() {
                         </label>
                         <span className="text-xs text-muted">Auto-refresh</span>
                         <button className="btn btn-danger btn-sm" onClick={() => handleClear(filters.worker_type)}>
-                            🗑️ Clear {filters.worker_type || 'All'}
+                            <Trash2 size={14} /> Clear {filters.worker_type || 'All'}
                         </button>
                     </div>
                 )}
                 {activeTab === 'redis' && (
                     <button className="btn btn-secondary btn-sm" onClick={fetchRedis} disabled={redisLoading}>
-                        🔄 {redisLoading ? 'Refreshing…' : 'Refresh'}
+                        <RefreshCw size={14} /> {redisLoading ? 'Refreshing…' : 'Refresh'}
                     </button>
                 )}
             </div>
@@ -96,9 +97,9 @@ export default function Logs() {
             {/* Tab switcher */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
                 <button className={`btn btn-sm ${activeTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setActiveTab('logs')}>📄 Worker Logs</button>
+                    onClick={() => setActiveTab('logs')}><FileText size={14} /> Worker Logs</button>
                 <button className={`btn btn-sm ${activeTab === 'redis' ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setActiveTab('redis')}>🔴 Redis Pool</button>
+                    onClick={() => setActiveTab('redis')}><CircleDot size={14} style={{ color: 'var(--error)' }} /> Redis Pool</button>
             </div>
 
             {/* ═══ LOGS TAB ═══ */}
@@ -108,7 +109,7 @@ export default function Logs() {
                     {schedule.length > 0 && (
                         <div className="card mb-20" style={{ padding: '12px 20px' }}>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-                                <span style={{ fontSize: 14, fontWeight: 600 }}>⏱️ Scheduled Tasks</span>
+                                <Clock size={14} /><span style={{ fontSize: 14, fontWeight: 600 }}>Scheduled Tasks</span>
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
                                 {schedule.map(item => {
@@ -165,7 +166,7 @@ export default function Logs() {
                                 placeholder="Search logs..." value={filters.search}
                                 onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
                                 onKeyDown={e => e.key === 'Enter' && fetchLogs()} />
-                            <button className="btn btn-secondary btn-sm" onClick={fetchLogs}>🔍 Search</button>
+                            <button className="btn btn-secondary btn-sm" onClick={fetchLogs}><Search size={14} /> Search</button>
                         </div>
                     </div>
 
@@ -226,7 +227,7 @@ export default function Logs() {
                 <div>
                     {redisLoading && <div className="loading"><div className="loading-spinner" /> Inspecting Redis...</div>}
                     {redisError && <div className="card" style={{ padding: 20, borderColor: 'var(--error)' }}>
-                        <span style={{ color: 'var(--error)' }}>❌ Redis error: {redisError}</span>
+                        <span style={{ color: 'var(--error)' }}><XCircle size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> Redis error: {redisError}</span>
                     </div>}
 
                     {redisInfo && (
@@ -234,26 +235,26 @@ export default function Logs() {
                             {/* Stats overview */}
                             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 24 }}>
                                 <div className="stat-card">
-                                    <div className="stat-icon">🔴</div>
+                                    <div className="stat-icon"><CircleDot size={20} style={{ color: 'var(--error)' }} /></div>
                                     <div className="stat-value" style={{ color: redisInfo.status === 'ok' ? 'var(--success)' : 'var(--error)' }}>
                                         {redisInfo.status === 'ok' ? 'Online' : 'Error'}
                                     </div>
                                     <div className="stat-label">Redis v{redisInfo.redis_version}</div>
                                 </div>
                                 <div className="stat-card">
-                                    <div className="stat-icon">🗝️</div>
+                                    <div className="stat-icon"><Key size={20} /></div>
                                     <div className="stat-value">{(redisInfo.total_keys || 0).toLocaleString()}</div>
                                     <div className="stat-label">Total Keys</div>
                                 </div>
                                 <div className="stat-card">
-                                    <div className="stat-icon">🛡️</div>
+                                    <div className="stat-icon"><Shield size={20} /></div>
                                     <div className="stat-value" style={{ color: redisInfo.cve_keys_found > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
                                         {redisInfo.cve_keys_found || 0}
                                     </div>
                                     <div className="stat-label">CVE Keys</div>
                                 </div>
                                 <div className="stat-card">
-                                    <div className="stat-icon">💾</div>
+                                    <div className="stat-icon"><HardDrive size={20} /></div>
                                     <div className="stat-value">{redisInfo.used_memory || '?'}</div>
                                     <div className="stat-label">Memory Used</div>
                                 </div>
@@ -262,7 +263,7 @@ export default function Logs() {
                             {/* Celery queues */}
                             {Object.keys(redisInfo.celery_queues || {}).length > 0 && (
                                 <div className="card mb-20">
-                                    <div className="card-header"><div className="card-title">⚙️ Celery Queues (Pending Tasks)</div></div>
+                                    <div className="card-header"><div className="card-title"><Settings size={16} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />Celery Queues (Pending Tasks)</div></div>
                                     <div style={{ padding: '12px 20px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                                         {Object.entries(redisInfo.celery_queues).map(([q, len]) => (
                                             <div key={q} style={{ padding: '8px 16px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
@@ -277,7 +278,7 @@ export default function Logs() {
                             {/* Key distribution */}
                             {Object.keys(redisInfo.key_categories || {}).length > 0 && (
                                 <div className="card mb-20">
-                                    <div className="card-header"><div className="card-title">📊 Key Distribution by Prefix</div></div>
+                                    <div className="card-header"><div className="card-title"><BarChart3 size={16} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />Key Distribution by Prefix</div></div>
                                     <div className="table-container">
                                         <table>
                                             <thead><tr><th>Key Prefix</th><th>Count</th></tr></thead>
@@ -307,7 +308,7 @@ export default function Logs() {
                             {/* CVE samples */}
                             {(redisInfo.cve_samples || []).length > 0 && (
                                 <div className="card">
-                                    <div className="card-header"><div className="card-title">🛡️ Sampled CVE Entries in Redis</div></div>
+                                    <div className="card-header"><div className="card-title"><Shield size={16} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />Sampled CVE Entries in Redis</div></div>
                                     <div className="table-container">
                                         <table>
                                             <thead><tr><th>Key</th><th>CVE ID</th><th>Severity</th><th>Source</th></tr></thead>
@@ -329,7 +330,7 @@ export default function Logs() {
                             {redisInfo.cve_keys_found === 0 && redisInfo.status === 'ok' && (
                                 <div className="card" style={{ padding: 20, marginTop: 16, borderColor: 'var(--warning)' }}>
                                     <span style={{ color: 'var(--warning)' }}>
-                                        ⚠️ Redis is connected but has no <code>cve:*</code> keys yet.
+                                        <AlertTriangle size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> Redis is connected but has no <code>cve:*</code> keys yet.
                                         This is normal before the first scheduled pipeline run.
                                     </span>
                                 </div>
@@ -339,7 +340,7 @@ export default function Logs() {
 
                     {!redisInfo && !redisLoading && !redisError && (
                         <div className="card" style={{ padding: 40, textAlign: 'center' }}>
-                            <button className="btn btn-primary" onClick={fetchRedis}>🔴 Inspect Redis Pool</button>
+                            <button className="btn btn-primary" onClick={fetchRedis}><CircleDot size={14} style={{ color: 'var(--error)' }} /> Inspect Redis Pool</button>
                         </div>
                     )}
                 </div>

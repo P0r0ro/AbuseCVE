@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { getIntegrations, createIntegration, updateIntegration, deleteIntegration, toggleIntegration, testIntegration } from '../api';
+import { Link2, Building2, Ticket, Zap, Plus, Pencil, Loader2, FlaskConical, Trash2, CheckCircle2, XCircle, Save } from 'lucide-react';
 
 const TYPES = [
-    { value: 'webhook', label: '🔗 Webhook', desc: 'Generic HTTP webhook' },
-    { value: 'ms_crm', label: '🏢 Microsoft CRM', desc: 'Dynamics 365 case creation' },
-    { value: 'jira', label: '🎫 Jira', desc: 'Jira issue creation' },
-    { value: 'custom', label: '⚡ Custom', desc: 'Custom HTTP endpoint' },
+    { value: 'webhook', label: 'Webhook', icon: Link2, desc: 'Generic HTTP webhook' },
+    { value: 'ms_crm', label: 'Microsoft CRM', icon: Building2, desc: 'Dynamics 365 case creation' },
+    { value: 'jira', label: 'Jira', icon: Ticket, desc: 'Jira issue creation' },
+    { value: 'custom', label: 'Custom', icon: Zap, desc: 'Custom HTTP endpoint' },
 ];
 
 const AUTH_TYPES = [
@@ -103,10 +104,10 @@ export default function Integrations() {
         <div className="main-content animate-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <div>
-                    <h1 className="header-title">🔗 Integrations</h1>
+                    <h1 className="header-title">Integrations</h1>
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>Configure webhooks and CRM integrations for automated alert dispatch</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => openEditor(null)}>➕ Add Integration</button>
+                <button className="btn btn-primary" onClick={() => openEditor(null)}><Plus size={14} /> Add Integration</button>
             </div>
 
             {/* Integration cards */}
@@ -116,8 +117,8 @@ export default function Integrations() {
                         <div className="card-header">
                             <div>
                                 <div className="card-title">{int.name}</div>
-                                <div className="text-xs text-muted" style={{ marginTop: 2 }}>
-                                    {TYPES.find(t => t.value === int.type)?.label || int.type}
+                                <div className="text-xs text-muted" style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    {(() => { const T = TYPES.find(t => t.value === int.type); return T ? <><T.icon size={12} /> {T.label}</> : int.type; })()}
                                 </div>
                             </div>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -145,11 +146,11 @@ export default function Integrations() {
                         )}
 
                         <div style={{ display: 'flex', gap: 8 }}>
-                            <button className="btn btn-secondary btn-sm" onClick={() => openEditor(int)}>✏️ Edit</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => openEditor(int)}><Pencil size={12} /> Edit</button>
                             <button className="btn btn-secondary btn-sm" onClick={() => handleTest(int.id)} disabled={testing === int.id}>
-                                {testing === int.id ? '⏳ Testing...' : '🧪 Test'}
+                                {testing === int.id ? <><Loader2 size={12} className="spinning" /> Testing...</> : <><FlaskConical size={12} /> Test</>}
                             </button>
-                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(int.id)}>🗑️</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(int.id)}><Trash2 size={12} /></button>
                         </div>
                     </div>
                 ))}
@@ -166,7 +167,9 @@ export default function Integrations() {
             {testResult && (
                 <div className="card mb-20" style={{ borderColor: testResult.status === 'success' ? 'rgba(74,222,128,0.3)' : 'rgba(239,68,68,0.3)' }}>
                     <div className="card-header">
-                        <div className="card-title">{testResult.status === 'success' ? '✅ Test Successful' : '❌ Test Failed'}</div>
+                        <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            {testResult.status === 'success' ? <><CheckCircle2 size={16} style={{ color: 'var(--success)' }} /> Test Successful</> : <><XCircle size={16} style={{ color: 'var(--error)' }} /> Test Failed</>}
+                        </div>
                         <button className="modal-close" onClick={() => setTestResult(null)}>×</button>
                     </div>
                     {testResult.status_code && (
@@ -191,7 +194,7 @@ export default function Integrations() {
                 <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setEditing(null)}>
                     <div className="modal" style={{ maxWidth: 640 }}>
                         <div className="modal-header">
-                            <h2 className="modal-title">{editing === 'new' ? '➕ New Integration' : '✏️ Edit Integration'}</h2>
+                            <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{editing === 'new' ? <><Plus size={18} /> New Integration</> : <><Pencil size={18} /> Edit Integration</>}</h2>
                             <button className="modal-close" onClick={() => setEditing(null)}>×</button>
                         </div>
 
@@ -205,6 +208,7 @@ export default function Integrations() {
                                 <label className="form-label">Type</label>
                                 <select className="form-select" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
                                     {TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+
                                 </select>
                             </div>
                             <div className="form-group">
@@ -248,7 +252,7 @@ export default function Integrations() {
                         <div className="modal-footer">
                             <button className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
                             <button className="btn btn-primary" onClick={handleSave} disabled={!form.name || !form.url}>
-                                {editing === 'new' ? '➕ Create' : '💾 Save'}
+                                {editing === 'new' ? <><Plus size={14} /> Create</> : <><Save size={14} /> Save</>}
                             </button>
                         </div>
                     </div>

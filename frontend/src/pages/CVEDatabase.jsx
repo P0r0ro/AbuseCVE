@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCVEs, searchCVEsByPQL, getQueryHelp, exportCVEsExcel } from '../api';
+import { Download, ClipboardList, Package, Search, X, ChevronDown, ChevronUp, AlertTriangle, BookOpen } from 'lucide-react';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -90,7 +91,7 @@ export default function CVEDatabase() {
                 </div>
                 <div style={{ position: 'relative' }}>
                     <button className="btn btn-secondary" onClick={() => setShowExportMenu(!showExportMenu)} disabled={exporting}>
-                        {exporting ? '...Exporting' : '📥 Export Excel'}
+                        {exporting ? '...Exporting' : <><Download size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Export Excel</>}
                     </button>
                     {showExportMenu && (
                         <div style={{
@@ -105,7 +106,7 @@ export default function CVEDatabase() {
                             }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
                                onMouseOut={e => e.target.style.background = 'none'}
                                onClick={() => handleExport('filtered')}>
-                                📋 Export Filtered
+                                <ClipboardList size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Export Filtered
                             </button>
                             <button style={{
                                 display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
@@ -114,7 +115,7 @@ export default function CVEDatabase() {
                             }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
                                onMouseOut={e => e.target.style.background = 'none'}
                                onClick={() => handleExport('all')}>
-                                📦 Export All
+                                <Package size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Export All
                             </button>
                         </div>
                     )}
@@ -144,7 +145,7 @@ export default function CVEDatabase() {
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <div style={{ flex: 1 }}>
                         <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            🔍 PQL Search
+                            <Search size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> PQL Search
                             <button className="btn btn-secondary btn-sm" style={{ fontSize: 11, padding: '2px 8px' }}
                                 onClick={async () => {
                                     setShowHelp(true);
@@ -185,10 +186,10 @@ export default function CVEDatabase() {
                                 setPages(data.pages || 1);
                             } catch (e) { console.error(e); }
                             finally { setLoading(false); }
-                        }}>🔎 Search</button>
+                        }}><Search size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Search</button>
                     {pqlQuery && (
                         <button className="btn btn-secondary" style={{ alignSelf: 'flex-end', marginBottom: 20 }}
-                            onClick={() => { setPqlQuery(''); fetchData(); }}>✕ Clear</button>
+                            onClick={() => { setPqlQuery(''); fetchData(); }}><X size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Clear</button>
                     )}
                 </div>
             </div>
@@ -259,7 +260,7 @@ export default function CVEDatabase() {
                         </select>
                         <button className="btn btn-secondary btn-sm"
                             onClick={() => setParams(p => ({ ...p, sort_order: p.sort_order === 'desc' ? 'asc' : 'desc' }))}>
-                            {params.sort_order === 'desc' ? '↓' : '↑'}
+                            {params.sort_order === 'desc' ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                         </button>
                     </div>
                 </div>
@@ -344,11 +345,11 @@ export default function CVEDatabase() {
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2 className="modal-title" style={{ color: 'var(--purple-400)' }}>{selected.cve_id}</h2>
-                            <button className="modal-close" onClick={() => setSelected(null)}>✕</button>
+                            <button className="modal-close" onClick={() => setSelected(null)}><X size={16} /></button>
                         </div>
                         <div className="flex gap-8 mb-16">
                             <span className={`badge badge-${(selected.severity || 'unknown').toLowerCase()}`}>{selected.severity || 'N/A'}</span>
-                            {selected.kev_flag && <span className="badge badge-kev">⚠️ Known Exploited</span>}
+                            {selected.kev_flag && <span className="badge badge-kev"><AlertTriangle size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Known Exploited</span>}
                             {selected.source && (
                                 <span style={{
                                     fontSize: 11, padding: '2px 8px', borderRadius: 4,
@@ -421,8 +422,8 @@ export default function CVEDatabase() {
                 <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowHelp(false)}>
                     <div className="modal" style={{ maxWidth: 700 }}>
                         <div className="modal-header">
-                            <h2 className="modal-title">📖 PQL Query Language Reference</h2>
-                            <button className="modal-close" onClick={() => setShowHelp(false)}>×</button>
+                            <h2 className="modal-title"><BookOpen size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> PQL Query Language Reference</h2>
+                            <button className="modal-close" onClick={() => setShowHelp(false)}><X size={16} /></button>
                         </div>
                         {queryHelp?.error ? (
                             <p className="text-sm" style={{ color: 'var(--error)' }}>{queryHelp.error}</p>

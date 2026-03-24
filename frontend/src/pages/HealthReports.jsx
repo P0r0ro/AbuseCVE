@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ShieldCheck, BarChart3, Mail, ClipboardList, AlertTriangle, Radio, Search, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { getHealthReports, getComponentStatus, generateHealthReport, sendHealthReport } from '../api';
 
 export default function HealthReports() {
@@ -23,18 +24,20 @@ export default function HealthReports() {
         setActionMsg('Generating report...');
         try {
             await generateHealthReport();
-            setActionMsg('✅ Report generated');
+            setActionMsg(<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><CheckCircle2 size={16} style={{ color: 'var(--success)' }} /> Report generated</span>);
             fetchData();
-        } catch (e) { setActionMsg(`❌ ${e.message}`); }
+        } catch (e) { setActionMsg(<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><XCircle size={16} style={{ color: 'var(--error)' }} /> {e.message}</span>); }
     };
 
     const handleSend = async () => {
         setActionMsg('Generating and sending report...');
         try {
             const result = await sendHealthReport();
-            setActionMsg(result.email?.status === 'sent' ? '✅ Report sent!' : `⚠️ Email: ${result.email?.error || 'unknown'}`);
+            setActionMsg(result.email?.status === 'sent'
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><CheckCircle2 size={16} style={{ color: 'var(--success)' }} /> Report sent!</span>
+                : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={16} style={{ color: 'var(--warning)' }} /> Email: {result.email?.error || 'unknown'}</span>);
             fetchData();
-        } catch (e) { setActionMsg(`❌ ${e.message}`); }
+        } catch (e) { setActionMsg(<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><XCircle size={16} style={{ color: 'var(--error)' }} /> {e.message}</span>); }
     };
 
     // Colour the status badge — now handles richer strings like "ok (145,312 CVEs)"
@@ -60,12 +63,12 @@ export default function HealthReports() {
         <div className="main-content animate-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <div>
-                    <h1 className="header-title">🏥 Health Reports</h1>
+                    <h1 className="header-title">Health Reports</h1>
                     <p className="text-sm text-muted" style={{ marginTop: 4 }}>System health monitoring and daily reports</p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" onClick={handleGenerate}>📊 Generate Report</button>
-                    <button className="btn btn-primary" onClick={handleSend}>📧 Generate &amp; Send</button>
+                    <button className="btn btn-secondary" onClick={handleGenerate}><BarChart3 size={16} style={{ marginRight: 6 }} /> Generate Report</button>
+                    <button className="btn btn-primary" onClick={handleSend}><Mail size={16} style={{ marginRight: 6 }} /> Generate &amp; Send</button>
                 </div>
             </div>
 
@@ -77,7 +80,7 @@ export default function HealthReports() {
 
             {/* Live Component Status */}
             <div className="card mb-24">
-                <div className="card-header"><div className="card-title">🟢 Live Component Status</div></div>
+                <div className="card-header"><div className="card-title"><div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: 'var(--success)', display: 'inline-block', marginRight: 8 }} /> Live Component Status</div></div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, padding: '8px 20px 20px' }}>
                     {Object.entries(status).map(([comp, val]) => {
                         const display = formatVal(val);
@@ -97,7 +100,7 @@ export default function HealthReports() {
 
             {/* Report History */}
             <div className="card">
-                <div className="card-header"><div className="card-title">📋 Report History</div></div>
+                <div className="card-header"><div className="card-title"><ClipboardList size={18} style={{ marginRight: 8, verticalAlign: 'middle' }} /> Report History</div></div>
                 <div className="table-container">
                     <table>
                         <thead>
@@ -125,7 +128,7 @@ export default function HealthReports() {
                                             : <span className="badge badge-success">None</span>
                                         }
                                     </td>
-                                    <td>{r.sent ? <span className="badge badge-success">✓ Sent</span> : <span className="badge badge-info">Local</span>}</td>
+                                    <td>{r.sent ? <span className="badge badge-success"><CheckCircle2 size={12} style={{ marginRight: 4 }} /> Sent</span> : <span className="badge badge-info">Local</span>}</td>
                                 </tr>
                             ))}
                             {reports.length === 0 && (
@@ -157,7 +160,7 @@ export default function HealthReports() {
                         {/* Warnings */}
                         {(selected.warnings?.length > 0) && (
                             <div className="mb-16">
-                                <h4 className="mb-8" style={{ color: 'var(--warning)' }}>⚠️ Warnings</h4>
+                                <h4 className="mb-8" style={{ color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={18} /> Warnings</h4>
                                 {selected.warnings.map((w, i) => (
                                     <p key={i} className="text-sm" style={{ color: 'var(--warning)', marginBottom: 4 }}>• {w}</p>
                                 ))}
@@ -167,7 +170,7 @@ export default function HealthReports() {
                         {/* Components */}
                         {selected.components_status && (
                             <div className="mb-16">
-                                <h4 className="mb-8">📡 Components</h4>
+                                <h4 className="mb-8" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Radio size={18} /> Components</h4>
                                 {Object.entries(selected.components_status).map(([k, v]) => {
                                     const display = formatVal(v);
                                     if (display === null) return null;
@@ -184,7 +187,7 @@ export default function HealthReports() {
                         {/* Redis details */}
                         {selected.components_status?.redis_details && typeof selected.components_status.redis_details === 'object' && (
                             <div className="mb-16">
-                                <h4 className="mb-8">🔴 Redis Detail</h4>
+                                <h4 className="mb-8" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: 'var(--error)', display: 'inline-block' }} /> Redis Detail</h4>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
                                     {Object.entries(selected.components_status.redis_details).map(([k, v]) => (
                                         <div key={k} style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 6 }}>
@@ -199,7 +202,7 @@ export default function HealthReports() {
                         {/* Per-filter test results */}
                         {(selected.filter_test_results?.length > 0) && (
                             <div className="mb-16">
-                                <h4 className="mb-8">🔍 Filter Test Results <span className="text-xs text-muted">(vs last 5000 CVEs)</span></h4>
+                                <h4 className="mb-8" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Search size={18} /> Filter Test Results <span className="text-xs text-muted">(vs last 5000 CVEs)</span></h4>
                                 <div className="table-container">
                                     <table>
                                         <thead><tr><th>Filter</th><th>Matches</th><th>Rate</th><th>Status</th></tr></thead>
@@ -211,7 +214,7 @@ export default function HealthReports() {
                                                     <td className="text-mono">{f.match_rate ?? 0}%</td>
                                                     <td>
                                                         <span className={`badge badge-${f.status === 'matching' ? 'success' : 'warning'}`}>
-                                                            {f.status === 'matching' ? '✓ Matching' : '⚠ No matches'}
+                                                            {f.status === 'matching' ? <><CheckCircle2 size={12} style={{ marginRight: 4 }} /> Matching</> : <><AlertTriangle size={12} style={{ marginRight: 4 }} /> No matches</>}
                                                         </span>
                                                     </td>
                                                 </tr>
@@ -225,7 +228,7 @@ export default function HealthReports() {
                         {/* Errors */}
                         {selected.errors?.length > 0 && (
                             <div>
-                                <h4 className="mb-8" style={{ color: 'var(--error)' }}>❌ Errors</h4>
+                                <h4 className="mb-8" style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: 6 }}><XCircle size={18} /> Errors</h4>
                                 {selected.errors.map((e, i) => (
                                     <p key={i} className="text-sm" style={{ color: 'var(--error)', marginBottom: 4 }}>
                                         {e.cve_id}: {e.error}

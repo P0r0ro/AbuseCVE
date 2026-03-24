@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus, uploadMitreData, getCVE } from '../api';
+import { Database, BellDot, Filter, AlertTriangle, Search, RefreshCw, X, CheckCircle2, XCircle, Clock, Upload, FolderOpen, Loader2 } from 'lucide-react';
 
 const severityColors = {
     CRITICAL: 'var(--critical)',
@@ -103,9 +104,9 @@ export default function Dashboard() {
                 };
 
                 if (result.status === 'SUCCESS') {
-                    setScanStatus(`✅ ${task.label} completed successfully!`);
+                    setScanStatus({ type: 'success', text: `${task.label} completed successfully!` });
                 } else {
-                    setScanStatus(`❌ ${task.label} failed: ${formatResult(result.result)}`);
+                    setScanStatus({ type: 'error', text: `${task.label} failed: ${formatResult(result.result)}` });
                 }
             } else {
                 storeTask(newTask);
@@ -248,16 +249,17 @@ export default function Dashboard() {
                 </div>
                 <div className="header-actions">
                     <button className="btn btn-primary" onClick={handleScan}
-                        disabled={activeTask && !activeTask.finished}>🔍 Trigger Scan</button>
-                    <button className="btn btn-secondary" onClick={fetchData}>↻ Refresh</button>
+                        disabled={activeTask && !activeTask.finished}><Search size={14} /> Trigger Scan</button>
+                    <button className="btn btn-secondary" onClick={fetchData}><RefreshCw size={14} /> Refresh</button>
                 </div>
             </div>
 
             {scanStatus && (
-                <div className="card mb-20" style={{ padding: '12px 20px', borderColor: scanStatus.includes('✅') ? 'var(--success)' : scanStatus.includes('❌') ? 'var(--error)' : 'var(--border-accent)' }}>
-                    <span className="text-sm">{scanStatus}</span>
-                    <button className="text-sm" style={{ marginLeft: 12, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-                        onClick={() => setScanStatus('')}>✕</button>
+                <div className="card mb-20" style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 8, borderColor: scanStatus.type === 'success' ? 'var(--success)' : scanStatus.type === 'error' ? 'var(--error)' : 'var(--border-accent)' }}>
+                    {scanStatus.type === 'success' ? <CheckCircle2 size={14} style={{ color: 'var(--success)' }} /> : scanStatus.type === 'error' ? <XCircle size={14} style={{ color: 'var(--error)' }} /> : null}
+                    <span className="text-sm">{typeof scanStatus === 'string' ? scanStatus : scanStatus.text}</span>
+                    <button className="text-sm" style={{ marginLeft: 'auto', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                        onClick={() => setScanStatus('')}><X size={14} /></button>
                 </div>
             )}
 
@@ -285,19 +287,19 @@ export default function Dashboard() {
                                 {!activeTask.finished && (
                                     <div className="loading-spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
                                 )}
-                                <span style={{ fontWeight: 600, color: getTaskColor() }}>
+                                <span style={{ fontWeight: 600, color: getTaskColor(), display: 'flex', alignItems: 'center', gap: 6 }}>
                                     {activeTask.finished
-                                        ? (activeTask.status === 'SUCCESS' ? '✅' : '❌')
-                                        : '⏳'} {activeTask.label}
+                                        ? (activeTask.status === 'SUCCESS' ? <CheckCircle2 size={14} /> : <XCircle size={14} />)
+                                        : <Loader2 size={14} className="spinning" />} {activeTask.label}
                                 </span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                <span className="text-sm text-muted">⏱ {getElapsedTime()}</span>
+                                <span className="text-sm text-muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={12} /> {getElapsedTime()}</span>
                                 <span className="text-sm" style={{ color: getTaskColor() }}>{activeTask.status}</span>
                                 {activeTask.finished && (
                                     <button className="text-sm" style={{
                                         color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer'
-                                    }} onClick={dismissTask}>✕</button>
+                                    }} onClick={dismissTask}><X size={14} /></button>
                                 )}
                             </div>
                         </div>
@@ -333,22 +335,22 @@ export default function Dashboard() {
             {/* Stats Grid */}
             <div className="stats-grid">
                 <div className="stat-card">
-                    <div className="stat-icon">🗄️</div>
+                    <div className="stat-icon"><Database size={24} style={{ color: 'var(--purple-400)' }} /></div>
                     <div className="stat-value">{data?.total_cves?.toLocaleString() || 0}</div>
                     <div className="stat-label">Total CVEs in Database</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">🔔</div>
+                    <div className="stat-icon"><BellDot size={24} style={{ color: 'var(--cyber-blue)' }} /></div>
                     <div className="stat-value">{data?.today_alerts || 0}</div>
                     <div className="stat-label">Today's Alerts</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">🔍</div>
+                    <div className="stat-icon"><Filter size={24} style={{ color: 'var(--success)' }} /></div>
                     <div className="stat-value">{data?.active_filters || 0}</div>
                     <div className="stat-label">Active Filters</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">⚠️</div>
+                    <div className="stat-icon"><AlertTriangle size={24} style={{ color: 'var(--critical)' }} /></div>
                     <div className="stat-value">{data?.kev_count || 0}</div>
                     <div className="stat-label">Known Exploited (KEV)</div>
                 </div>
@@ -430,10 +432,10 @@ export default function Dashboard() {
 
                     <button className="btn btn-primary" onClick={handleInitDB}
                         disabled={(activeTask && !activeTask.finished) || (initMode === 'upload' && !mitreFile)}>
-                        {activeTask && !activeTask.finished ? '⏳ Task Running...' :
-                            initMode === 'upload' ? '📤 Upload MITRE Data' :
-                                initMode === 'local' ? '📂 Init from Local' :
-                                    '🗄️ Initialize Database (API)'}
+                        {activeTask && !activeTask.finished ? <><Loader2 size={14} className="spinning" /> Task Running...</> :
+                            initMode === 'upload' ? <><Upload size={14} /> Upload MITRE Data</> :
+                                initMode === 'local' ? <><FolderOpen size={14} /> Init from Local</> :
+                                    <><Database size={14} /> Initialize Database (API)</>}
                     </button>
                 </div>
             </div>
@@ -495,7 +497,7 @@ export default function Dashboard() {
                                                 color: sourceColors[cve.source] || '#888',
                                             }}>{cve.source || '—'}</span>
                                         </td>
-                                        <td>{cve.kev_flag ? <span className="badge badge-kev">⚠ KEV</span> : '—'}</td>
+                                        <td>{cve.kev_flag ? <span className="badge badge-kev"><AlertTriangle size={10} /> KEV</span> : '—'}</td>
                                         <td className="text-sm text-muted">{cve.first_seen ? new Date(cve.first_seen).toLocaleDateString() : '—'}</td>
                                     </tr>
                                     {expandedCve === cve.cve_id && (

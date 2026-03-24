@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
+import { Mail, Search, Filter, Zap, CheckCircle2, XCircle, AlertTriangle, Circle, Loader2, Link, Play } from 'lucide-react';
 import { testSMTP, testFetch, testFilterEndpoint as testFilter, testPipeline, testFullChain } from '../api';
 
 const STEPS = [
-    { key: 'smtp', label: 'SMTP Connection', icon: '📧', fn: testSMTP, description: 'Verify SMTP server connectivity and send test email' },
-    { key: 'fetch', label: 'CVE Fetching', icon: '🔍', fn: testFetch, description: 'Fetch recent CVEs from NVD API' },
-    { key: 'filter', label: 'Filter Engine', icon: '🧲', fn: testFilter, description: 'Apply filter rules to fetched CVEs' },
-    { key: 'pipeline', label: 'Full Pipeline', icon: '⚡', fn: testPipeline, description: 'Run complete fetch → filter → dedup pipeline' },
+    { key: 'smtp', label: 'SMTP Connection', icon: <Mail size={18} />, fn: testSMTP, description: 'Verify SMTP server connectivity and send test email' },
+    { key: 'fetch', label: 'CVE Fetching', icon: <Search size={18} />, fn: testFetch, description: 'Fetch recent CVEs from NVD API' },
+    { key: 'filter', label: 'Filter Engine', icon: <Filter size={18} />, fn: testFilter, description: 'Apply filter rules to fetched CVEs' },
+    { key: 'pipeline', label: 'Full Pipeline', icon: <Zap size={18} />, fn: testPipeline, description: 'Run complete fetch → filter → dedup pipeline' },
 ];
 
 export default function TestPage() {
@@ -47,10 +48,10 @@ export default function TestPage() {
 
     const statusIcon = (status) => {
         switch (status) {
-            case 'pass': case 'ok': case 'sent': return '✅';
-            case 'fail': case 'error': case 'failed': return '❌';
-            case 'partial': case 'warning': return '⚠️';
-            default: return '⬜';
+            case 'pass': case 'ok': case 'sent': return <CheckCircle2 size={14} />;
+            case 'fail': case 'error': case 'failed': return <XCircle size={14} />;
+            case 'partial': case 'warning': return <AlertTriangle size={14} />;
+            default: return <Circle size={14} />;
         }
     };
 
@@ -87,7 +88,7 @@ export default function TestPage() {
                                 <button className="btn btn-secondary btn-sm"
                                     disabled={running === step.key}
                                     onClick={() => runTest(step)}>
-                                    {running === step.key ? '⏳' : '▶ Run'}
+                                    {running === step.key ? <Loader2 size={14} className="spinning" /> : <><Play size={14} /> Run</>}
                                 </button>
                             </div>
                         </div>
@@ -98,9 +99,9 @@ export default function TestPage() {
             {/* Full Chain Test */}
             <div className="card">
                 <div className="card-header">
-                    <div className="card-title">🔗 Full Chain Test</div>
+                    <div className="card-title"><Link size={18} /> Full Chain Test</div>
                     <button className="btn btn-primary" onClick={runFullChain} disabled={chainRunning}>
-                        {chainRunning ? '⏳ Running...' : '🚀 Run Full Chain Test'}
+                        {chainRunning ? <><Loader2 size={14} className="spinning" /> Running...</> : <><Play size={14} /> Run Full Chain Test</>}
                     </button>
                 </div>
                 <p className="text-sm text-muted mb-16">Tests the complete flow: SMTP → Fetch → Filter → Database → Redis connectivity</p>

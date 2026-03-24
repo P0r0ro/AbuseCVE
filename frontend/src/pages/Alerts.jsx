@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getAlerts, getAlertStats, getCVE, exportAlertsExcel } from '../api';
 import RefineModal from '../components/RefineModal';
+import { CheckCircle2, XCircle, Package, BadgePlus, RefreshCw, Download, ClipboardList, X, Send, Calendar, Search, AlertTriangle } from 'lucide-react';
 
 const STATUS_COLORS = {
     sent: 'var(--success)',
@@ -11,15 +12,15 @@ const STATUS_COLORS = {
 
 const STATUS_OPTIONS = [
     { value: '', label: 'All Statuses' },
-    { value: 'sent', label: '✅ Sent' },
-    { value: 'failed', label: '❌ Failed' },
-    { value: 'stored', label: '📦 Stored (no match)' },
+    { value: 'sent', label: 'Sent' },
+    { value: 'failed', label: 'Failed' },
+    { value: 'stored', label: 'Stored (no match)' },
 ];
 
 const ISNEW_OPTIONS = [
     { value: '', label: 'All CVEs' },
-    { value: 'true', label: '🆕 New CVEs only' },
-    { value: 'false', label: '🔄 Duplicate CVEs only' },
+    { value: 'true', label: 'New CVEs only' },
+    { value: 'false', label: 'Duplicate CVEs only' },
 ];
 
 const QUICK_PERIODS = [
@@ -204,7 +205,7 @@ export default function Alerts() {
                 <div style={{ display: 'flex', gap: 8 }}>
                     <div style={{ position: 'relative' }}>
                         <button className="btn btn-secondary" onClick={() => setShowExportMenu(!showExportMenu)} disabled={exporting}>
-                            {exporting ? '...Exporting' : '📥 Export Excel'}
+                            {exporting ? '...Exporting' : <><Download size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Export Excel</>}
                         </button>
                         {showExportMenu && (
                             <div style={{
@@ -219,7 +220,7 @@ export default function Alerts() {
                                 }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
                                    onMouseOut={e => e.target.style.background = 'none'}
                                    onClick={() => handleExport('filtered')}>
-                                    📋 Export Filtered
+                                    <ClipboardList size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Export Filtered
                                 </button>
                                 <button style={{
                                     display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
@@ -228,13 +229,13 @@ export default function Alerts() {
                                 }} onMouseOver={e => e.target.style.background = 'rgba(124,58,237,0.1)'}
                                    onMouseOut={e => e.target.style.background = 'none'}
                                    onClick={() => handleExport('all')}>
-                                    📦 Export All
+                                    <Package size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Export All
                                 </button>
                             </div>
                         )}
                     </div>
                     <button className="btn btn-secondary" onClick={() => fetchAlerts(true)} disabled={refreshing}>
-                        {refreshing ? '↻ Refreshing...' : '↻ Refresh'}
+                        {refreshing ? <><RefreshCw size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Refreshing...</> : <><RefreshCw size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Refresh</>}
                     </button>
                 </div>
             </div>
@@ -279,7 +280,7 @@ export default function Alerts() {
                 {period && (
                     <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }}
                         onClick={() => { setPeriod(''); setCustomNum(''); }}>
-                        ✕ All Time
+                        <X size={12} style={{ verticalAlign: 'middle', marginRight: 2 }} /> All Time
                     </button>
                 )}
                 <span className="text-xs text-muted" style={{ marginLeft: 'auto' }}>
@@ -290,31 +291,31 @@ export default function Alerts() {
             {/* Stats — 5 cards (period-scoped) */}
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: 24 }}>
                 <div className="stat-card">
-                    <div className="stat-icon">📨</div>
+                    <div className="stat-icon"><Send size={20} /></div>
                     <div className="stat-value">{stats.total || 0}</div>
                     <div className="stat-label">Total Alerts</div>
                     <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">✅</div>
+                    <div className="stat-icon"><CheckCircle2 size={20} /></div>
                     <div className="stat-value" style={{ color: 'var(--success)' }}>{stats.sent || 0}</div>
                     <div className="stat-label">Sent</div>
                     <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">❌</div>
+                    <div className="stat-icon"><XCircle size={20} /></div>
                     <div className="stat-value" style={{ color: 'var(--error)' }}>{stats.failed || 0}</div>
                     <div className="stat-label">Failed</div>
                     <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">🆕</div>
+                    <div className="stat-icon"><BadgePlus size={20} /></div>
                     <div className="stat-value" style={{ color: 'var(--purple-400)' }}>{stats.new_cve_alerts || 0}</div>
                     <div className="stat-label">New CVE Alerts</div>
                     <div className="text-xs text-muted" style={{ marginTop: 2 }}>{currentPeriodLabel}</div>
                 </div>
                 <div className="stat-card">
-                    <div className="stat-icon">📅</div>
+                    <div className="stat-icon"><Calendar size={20} /></div>
                     <div className="stat-value">{stats.sent_in_period || 0}</div>
                     <div className="stat-label">Sent ({currentPeriodLabel})</div>
                 </div>
@@ -337,13 +338,13 @@ export default function Alerts() {
                         onChange={e => { setPqlInput(e.target.value); if (!e.target.value) setPql(''); }}
                     />
                     <button type="submit" className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 13 }}>
-                        🔍
+                        <Search size={14} />
                     </button>
                 </form>
                 {(status || isNew || pql) && (
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 12px' }}
                         onClick={() => { setStatus(''); setIsNew(''); setPql(''); setPqlInput(''); }}>
-                        ✕ Reset Filters
+                        <X size={12} style={{ verticalAlign: 'middle', marginRight: 2 }} /> Reset Filters
                     </button>
                 )}
             </div>
@@ -392,16 +393,16 @@ export default function Alerts() {
                                                     background: `${STATUS_COLORS[a.status] || 'var(--text-muted)'}20`,
                                                     color: STATUS_COLORS[a.status] || 'var(--text-muted)',
                                                 }}>
-                                                    {a.status === 'sent' ? '✅ sent' :
-                                                        a.status === 'failed' ? '❌ failed' :
-                                                            a.status === 'stored' ? '📦 stored' : a.status}
+                                                    {a.status === 'sent' ? <><CheckCircle2 size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> sent</> :
+                                                        a.status === 'failed' ? <><XCircle size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> failed</> :
+                                                            a.status === 'stored' ? <><Package size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> stored</> : a.status}
                                                 </span>
                                             </td>
                                             <td>
                                                 {a.is_new_cve === true ? (
-                                                    <span style={{ fontSize: 11, color: 'var(--purple-400)', fontWeight: 600 }}>🆕 new</span>
+                                                    <span style={{ fontSize: 11, color: 'var(--purple-400)', fontWeight: 600 }}><BadgePlus size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> new</span>
                                                 ) : a.is_new_cve === false ? (
-                                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>🔄 dup</span>
+                                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}><RefreshCw size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> dup</span>
                                                 ) : (
                                                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                                                 )}
@@ -442,7 +443,7 @@ export default function Alerts() {
                                                                 <div className="text-sm" style={{ marginBottom: 6 }}><strong>Description:</strong> {cveDetail.description || 'N/A'}</div>
                                                                 <div className="text-xs text-muted">
                                                                     Severity: {cveDetail.severity || 'N/A'} | CVSS: {cveDetail.cvss_score ?? 'N/A'} | Source: {cveDetail.source || 'N/A'}
-                                                                    {cveDetail.kev_flag && <span style={{ marginLeft: 8, color: 'var(--error)' }}>⚠ KEV</span>}
+                                                                    {cveDetail.kev_flag && <span style={{ marginLeft: 8, color: 'var(--error)' }}><AlertTriangle size={12} style={{ verticalAlign: 'middle', marginRight: 2 }} /> KEV</span>}
                                                                 </div>
                                                                 {cveDetail.references?.length > 0 && (
                                                                     <div style={{ marginTop: 6 }}>

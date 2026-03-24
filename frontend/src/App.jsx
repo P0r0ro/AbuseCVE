@@ -1,5 +1,16 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import {
+    LayoutDashboard,
+    Filter,
+    BellDot,
+    Database,
+    BookOpen,
+    Terminal,
+    Webhook,
+    Network,
+    ShieldCheck,
+} from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Filters from './pages/Filters';
 import Alerts from './pages/Alerts';
@@ -11,15 +22,15 @@ import Logs from './pages/Logs';
 import Integrations from './pages/Integrations';
 
 const navItems = [
-    { path: '/dashboard', icon: '📊', label: 'Dashboard' },
-    { path: '/filters', icon: '🔍', label: 'Filters & Tags' },
-    { path: '/alerts', icon: '🔔', label: 'Alerts' },
-    { path: '/cves', icon: '🗄️', label: 'CVE Database' },
-    { path: '/knowledge', icon: '📝', label: 'Knowledge Articles' },
-    { path: '/logs', icon: '📜', label: 'Logs' },
-    { path: '/integrations', icon: '🔗', label: 'Integrations' },
-    { path: '/test', icon: '🧪', label: 'Test Chain' },
-    { path: '/health', icon: '💊', label: 'Health Reports' },
+    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { path: '/filters', icon: Filter, label: 'Filters & Tags' },
+    { path: '/alerts', icon: BellDot, label: 'Alerts' },
+    { path: '/cves', icon: Database, label: 'CVE Database' },
+    { path: '/knowledge', icon: BookOpen, label: 'Knowledge Articles' },
+    { path: '/logs', icon: Terminal, label: 'Logs' },
+    { path: '/integrations', icon: Webhook, label: 'Integrations' },
+    { path: '/test', icon: Network, label: 'Test Chain' },
+    { path: '/health', icon: ShieldCheck, label: 'Health Reports' },
 ];
 
 export default function App() {
@@ -29,9 +40,11 @@ export default function App() {
                 {/* Sidebar */}
                 <aside className="sidebar">
                     <div className="sidebar-logo">
-                        <span className="logo-shield">🛡️</span>
+                        <div className="logo-icon-wrap">
+                            <ShieldCheck size={28} className="logo-shield-icon" />
+                        </div>
                         <h1>AbuseCVE</h1>
-                        <span className="logo-face">(≖_≖ )</span>
+                        <span className="logo-face">(&#8790;_&#8790; )</span>
                     </div>
                     <nav className="sidebar-nav">
                         {navItems.map(item => (
@@ -40,13 +53,13 @@ export default function App() {
                                 to={item.path}
                                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                             >
-                                <span className="nav-icon">{item.icon}</span>
+                                <item.icon size={18} className="nav-icon-svg" />
                                 {item.label}
                             </NavLink>
                         ))}
                     </nav>
                     <div className="sidebar-footer">
-                        AbuseCVE v1.0.0 • CTI Platform
+                        AbuseCVE v1.0.0 &middot; CTI Platform
                     </div>
                 </aside>
 
