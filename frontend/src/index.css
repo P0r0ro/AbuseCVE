@@ -491,6 +491,22 @@ body {
   padding-right: 36px;
 }
 
+/* Dark-theme option elements (native select dropdowns) */
+option {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+/* Date inputs */
+input[type="date"] {
+  color-scheme: dark;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
 /* ── Tables ────────────────────────────────── */
 .table-container {
   overflow-x: auto;

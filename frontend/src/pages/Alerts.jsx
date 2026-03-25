@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getAlerts, getAlertStats, getCVE, exportAlertsExcel } from '../api';
 import RefineModal from '../components/RefineModal';
-import { CheckCircle2, XCircle, Package, BadgePlus, RefreshCw, Download, ClipboardList, X, Send, Calendar, Search, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Package, BadgePlus, RefreshCw, Download, ClipboardList, X, Send, Calendar, Search, AlertTriangle, ArrowRight } from 'lucide-react';
 
 const STATUS_COLORS = {
     sent: 'var(--success)',
@@ -30,14 +30,12 @@ const QUICK_PERIODS = [
     { value: '90d', label: 'Last 90d' },
 ];
 
-const UNIT_OPTIONS = [
-    { value: 'd', label: 'Days' },
-    { value: 'w', label: 'Weeks' },
-    { value: 'm', label: 'Months' },
-    { value: 'y', label: 'Years' },
-];
-
-function periodLabel(period) {
+function periodLabel(period, dateFrom, dateTo) {
+    if (dateFrom || dateTo) {
+        const from = dateFrom || '...';
+        const to = dateTo || 'now';
+        return `${from} → ${to}`;
+    }
     if (!period) return 'All Time';
     if (period === '1d' || period === 'today') return 'Today';
     const match = period.match(/^(\d+)([dwmy])$/);
@@ -70,8 +68,9 @@ export default function Alerts() {
 
     // Filters
     const [period, setPeriod] = useState('1d');
-    const [customNum, setCustomNum] = useState('');
-    const [customUnit, setCustomUnit] = useState('d');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [showCalendar, setShowCalendar] = useState(false);
     const [status, setStatus] = useState('');
     const [isNew, setIsNew] = useState('');
     const [pql, setPql] = useState('');
@@ -82,19 +81,31 @@ export default function Alerts() {
 
     const buildParams = useCallback(() => {
         const p = { page, per_page: 30 };
-        if (period) p.period = period;
+        if (dateFrom || dateTo) {
+            if (dateFrom) p.date_from = dateFrom;
+            if (dateTo) p.date_to = dateTo;
+        } else if (period) {
+            p.period = period;
+        }
         if (status) p.status = status;
         if (pql) p.pql = pql;
         if (isNew !== '') p.is_new = isNew;
         return p;
-    }, [page, period, status, pql, isNew]);
+    }, [page, period, dateFrom, dateTo, status, pql, isNew]);
 
     const fetchAlerts = useCallback(async (silent = false) => {
         if (!silent) setLoading(true); else setRefreshing(true);
+        const statsParams = {};
+        if (dateFrom || dateTo) {
+            if (dateFrom) statsParams.date_from = dateFrom;
+            if (dateTo) statsParams.date_to = dateTo;
+        } else if (period) {
+            statsParams.period = period;
+        }
         try {
             const [data, s] = await Promise.all([
                 getAlerts(buildParams()),
-                getAlertStats(period),
+                getAlertStats(statsParams),
             ]);
             setAlerts(data.items || []);
             setTotal(data.total || 0);
@@ -108,21 +119,28 @@ export default function Alerts() {
     }, [buildParams, page, period]);
 
     // Initial load + filter changes
-    useEffect(() => { setPage(1); }, [period, status, isNew, pql]);
-    useEffect(() => { fetchAlerts(); }, [page, period, status, isNew, pql]);
+    useEffect(() => { setPage(1); }, [period, dateFrom, dateTo, status, isNew, pql]);
+    useEffect(() => { fetchAlerts(); }, [page, period, dateFrom, dateTo, status, isNew, pql]);
 
     // Auto-refresh every 30s
     useEffect(() => {
         pollRef.current = setInterval(async () => {
             try {
-                const s = await getAlertStats(period);
+                const sp = {};
+                if (dateFrom || dateTo) {
+                    if (dateFrom) sp.date_from = dateFrom;
+                    if (dateTo) sp.date_to = dateTo;
+                } else if (period) {
+                    sp.period = period;
+                }
+                const s = await getAlertStats(sp);
                 if (s.total !== prevTotalRef.current) {
                     fetchAlerts(true);
                 }
             } catch { /* silent */ }
         }, 30_000);
         return () => clearInterval(pollRef.current);
-    }, [fetchAlerts, period]);
+    }, [fetchAlerts, period, dateFrom, dateTo]);
 
     const handlePqlSearch = (e) => {
         e.preventDefault();
@@ -138,11 +156,18 @@ export default function Alerts() {
         finally { setLoadingDetail(false); }
     };
 
-    const handleCustomPeriod = () => {
-        const n = parseInt(customNum);
-        if (n > 0 && customUnit) {
-            setPeriod(`${n}${customUnit}`);
+    const handleDateRange = () => {
+        if (dateFrom || dateTo) {
+            setPeriod('');
+            setShowCalendar(false);
         }
+    };
+
+    const handleQuickPeriod = (val) => {
+        setPeriod(val);
+        setDateFrom('');
+        setDateTo('');
+        setShowCalendar(false);
     };
 
     const handleExport = async (mode) => {
@@ -151,7 +176,12 @@ export default function Alerts() {
         try {
             const p = { mode };
             if (mode === 'filtered') {
-                if (period) p.period = period;
+                if (dateFrom || dateTo) {
+                    if (dateFrom) p.date_from = dateFrom;
+                    if (dateTo) p.date_to = dateTo;
+                } else if (period) {
+                    p.period = period;
+                }
                 if (status) p.status = status;
                 if (pql) p.pql = pql;
                 if (isNew !== '') p.is_new = isNew;
@@ -181,17 +211,18 @@ export default function Alerts() {
     };
 
     const totalPages = Math.ceil(total / 30);
-    const currentPeriodLabel = periodLabel(period);
+    const currentPeriodLabel = periodLabel(period, dateFrom, dateTo);
 
     const filterStyle = {
         display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center',
         padding: '14px 20px', background: 'rgba(124,58,237,0.06)',
         border: '1px solid rgba(124,58,237,0.2)', borderRadius: 10, marginBottom: 20,
     };
-    const selectStyle = {
-        background: 'var(--card-bg)', border: '1px solid var(--border)',
-        color: 'var(--text-primary)', borderRadius: 6, padding: '6px 10px',
-        fontSize: 13, cursor: 'pointer',
+
+    const dateInputStyle = {
+        padding: '5px 10px', fontSize: 13, borderRadius: 6,
+        background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)',
+        color: 'var(--text-primary)', fontFamily: 'inherit',
     };
 
     return (
@@ -240,7 +271,7 @@ export default function Alerts() {
                 </div>
             </div>
 
-            {/* Time Filter — Wazuh-style */}
+            {/* Time Filter */}
             <div style={{
                 display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
                 marginBottom: 16, padding: '10px 16px',
@@ -250,36 +281,22 @@ export default function Alerts() {
                 <span className="text-sm text-muted" style={{ marginRight: 4 }}>Time Range:</span>
                 {QUICK_PERIODS.map(qp => (
                     <button key={qp.value}
-                        className={period === qp.value ? 'btn btn-primary' : 'btn btn-secondary'}
+                        className={period === qp.value && !dateFrom && !dateTo ? 'btn btn-primary' : 'btn btn-secondary'}
                         style={{ padding: '4px 12px', fontSize: 12 }}
-                        onClick={() => { setPeriod(qp.value); setCustomNum(''); }}>
+                        onClick={() => handleQuickPeriod(qp.value)}>
                         {qp.label}
                     </button>
                 ))}
                 <span className="text-sm text-muted" style={{ margin: '0 4px' }}>|</span>
-                <input
-                    type="number" min="1" max="999" placeholder="#"
-                    value={customNum}
-                    onChange={e => setCustomNum(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleCustomPeriod(); }}
-                    style={{
-                        width: 50, padding: '4px 8px', fontSize: 13, textAlign: 'center',
-                        background: 'var(--card-bg)', border: '1px solid var(--border)',
-                        color: 'var(--text-primary)', borderRadius: 6,
-                    }}
-                />
-                <select value={customUnit} onChange={e => setCustomUnit(e.target.value)} style={selectStyle}>
-                    {UNIT_OPTIONS.map(u => (
-                        <option key={u.value} value={u.value}>{u.label}</option>
-                    ))}
-                </select>
-                <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}
-                    onClick={handleCustomPeriod} disabled={!customNum}>
-                    Apply
+                <button
+                    className={`btn ${showCalendar || dateFrom || dateTo ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '4px 12px', fontSize: 12 }}
+                    onClick={() => setShowCalendar(!showCalendar)}>
+                    <Calendar size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Custom Range
                 </button>
-                {period && (
+                {(period || dateFrom || dateTo) && (
                     <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }}
-                        onClick={() => { setPeriod(''); setCustomNum(''); }}>
+                        onClick={() => { setPeriod(''); setDateFrom(''); setDateTo(''); setShowCalendar(false); }}>
                         <X size={12} style={{ verticalAlign: 'middle', marginRight: 2 }} /> All Time
                     </button>
                 )}
@@ -287,6 +304,42 @@ export default function Alerts() {
                     Showing: {currentPeriodLabel}
                 </span>
             </div>
+
+            {/* Calendar Date Range Picker */}
+            {showCalendar && (
+                <div style={{
+                    display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+                    marginBottom: 16, padding: '14px 20px',
+                    background: 'var(--bg-card)', border: '1px solid var(--border-accent)',
+                    borderRadius: 10,
+                }}>
+                    <span className="text-sm" style={{ fontWeight: 600 }}>From:</span>
+                    <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={e => setDateFrom(e.target.value)}
+                        style={dateInputStyle}
+                    />
+                    <ArrowRight size={14} style={{ color: 'var(--text-muted)' }} />
+                    <span className="text-sm" style={{ fontWeight: 600 }}>To:</span>
+                    <input
+                        type="date"
+                        value={dateTo}
+                        onChange={e => setDateTo(e.target.value)}
+                        style={dateInputStyle}
+                    />
+                    <button className="btn btn-primary" style={{ padding: '5px 16px', fontSize: 12 }}
+                        onClick={handleDateRange} disabled={!dateFrom && !dateTo}>
+                        Apply Range
+                    </button>
+                    {(dateFrom || dateTo) && (
+                        <button className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 12 }}
+                            onClick={() => { setDateFrom(''); setDateTo(''); setPeriod('1d'); }}>
+                            <X size={12} style={{ verticalAlign: 'middle', marginRight: 2 }} /> Clear Dates
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* Stats — 5 cards (period-scoped) */}
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: 24 }}>
@@ -323,10 +376,10 @@ export default function Alerts() {
 
             {/* Filter Bar */}
             <div style={filterStyle}>
-                <select value={status} onChange={e => setStatus(e.target.value)} style={selectStyle}>
+                <select className="form-select" value={status} onChange={e => setStatus(e.target.value)} style={{ width: 150, padding: '6px 10px', fontSize: 13 }}>
                     {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <select value={isNew} onChange={e => setIsNew(e.target.value)} style={selectStyle}>
+                <select className="form-select" value={isNew} onChange={e => setIsNew(e.target.value)} style={{ width: 160, padding: '6px 10px', fontSize: 13 }}>
                     {ISNEW_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <form onSubmit={handlePqlSearch} style={{ display: 'flex', gap: 6, flex: 1, minWidth: 220 }}>

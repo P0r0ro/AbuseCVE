@@ -73,9 +73,13 @@ export const getAlerts = (params = {}) => {
     });
     return request(`/alerts?${qs.toString()}`);
 };
-export const getAlertStats = (period) => {
-    const qs = period ? `?period=${encodeURIComponent(period)}` : '';
-    return request(`/alerts/stats${qs}`);
+export const getAlertStats = (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== '' && v !== null) qs.set(k, v);
+    });
+    const qsStr = qs.toString();
+    return request(`/alerts/stats${qsStr ? '?' + qsStr : ''}`);
 };
 
 // ── Knowledge Articles ───────────────────────

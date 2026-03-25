@@ -53,8 +53,22 @@ def _parse_period(period: Optional[str]) -> Optional[datetime]:
     return None
 
 
-def _apply_period(query, period: Optional[str]):
-    """Filter AlertLog query by time period."""
+def _apply_period(query, period: Optional[str], date_from: Optional[str] = None, date_to: Optional[str] = None):
+    """Filter AlertLog query by time period or explicit date range."""
+    if date_from or date_to:
+        if date_from:
+            try:
+                dt = datetime.strptime(date_from, "%Y-%m-%d")
+                query = query.where(AlertLog.sent_at >= dt)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                query = query.where(AlertLog.sent_at <= dt)
+            except ValueError:
+                pass
+        return query
     cutoff = _parse_period(period)
     if cutoff:
         return query.where(AlertLog.sent_at >= cutoff)
@@ -67,6 +81,8 @@ async def list_alerts(
     per_page: int = Query(50, ge=1, le=200),
     status: Optional[str] = None,
     period: Optional[str] = Query(None, description="today|week|month|year"),
+    date_from: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     pql: Optional[str] = Query(None, description="Search CVE ID or rule name"),
     is_new: Optional[bool] = Query(None, description="Filter by new vs duplicate CVEs"),
     db: AsyncSession = Depends(get_db),
@@ -75,8 +91,8 @@ async def list_alerts(
 
     if status:
         query = query.where(AlertLog.status == status)
-    if period:
-        query = _apply_period(query, period)
+    if date_from or date_to or period:
+        query = _apply_period(query, period, date_from, date_to)
     if pql:
         search = f"%{pql}%"
         query = query.where(
@@ -106,20 +122,44 @@ async def list_alerts(
 @router.get("/stats")
 async def alert_stats(
     period: Optional[str] = Query("1d", description="Time period: Nd, Nw, Nm, Ny or today/week/month/year"),
+    date_from: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get alert stats scoped to the selected period.
+    """Get alert stats scoped to the selected period or date range.
 
-    All counts are filtered by period. Default is 1d (today).
+    All counts are filtered by period/date range. Default is 1d (today).
     The 'sent_in_period' count tracks emails sent within the period.
     """
-    cutoff = _parse_period(period)
+    # Build scoping function based on date range or period
+    dt_from = None
+    dt_to = None
+    cutoff = None
 
-    # Base query with optional period filter
+    if date_from or date_to:
+        if date_from:
+            try:
+                dt_from = datetime.strptime(date_from, "%Y-%m-%d")
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            except ValueError:
+                pass
+    else:
+        cutoff = _parse_period(period)
+
     def scoped(base_query):
-        if cutoff:
-            return base_query.where(AlertLog.sent_at >= cutoff)
-        return base_query
+        q = base_query
+        if dt_from or dt_to:
+            if dt_from:
+                q = q.where(AlertLog.sent_at >= dt_from)
+            if dt_to:
+                q = q.where(AlertLog.sent_at <= dt_to)
+        elif cutoff:
+            q = q.where(AlertLog.sent_at >= cutoff)
+        return q
 
     total = (await db.execute(
         scoped(select(func.count()).select_from(AlertLog))
