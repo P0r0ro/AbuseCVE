@@ -83,6 +83,7 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
+  color-scheme: dark;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -491,19 +492,8 @@ body {
   padding-right: 36px;
 }
 
-/* Dark-theme option elements (native select dropdowns) */
-option {
-  background: var(--bg-card);
-  color: var(--text-primary);
-}
-
-/* Date inputs */
-input[type="date"] {
-  color-scheme: dark;
-}
-
+/* Date inputs — cursor for calendar icon */
 input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
   cursor: pointer;
 }
 

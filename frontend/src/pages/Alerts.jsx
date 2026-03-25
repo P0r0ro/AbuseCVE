@@ -116,7 +116,7 @@ export default function Alerts() {
             prevTotalRef.current = s.total;
         } catch (e) { console.error(e); }
         finally { setLoading(false); setRefreshing(false); }
-    }, [buildParams, page, period]);
+    }, [buildParams, page, period, dateFrom, dateTo]);
 
     // Initial load + filter changes
     useEffect(() => { setPage(1); }, [period, dateFrom, dateTo, status, isNew, pql]);
