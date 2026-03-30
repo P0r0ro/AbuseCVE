@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getDashboardOverview, triggerScan, initializeDB, initializeDBLocal, getTaskStatus, uploadMitreData, getCVE } from '../api';
-import { Database, BellDot, Filter, AlertTriangle, Search, RefreshCw, X, CheckCircle2, XCircle, Clock, Upload, FolderOpen, Loader2 } from 'lucide-react';
+import { getDashboardOverview, triggerScan, getTaskStatus, getCVE } from '../api';
+import { Database, BellDot, Filter, AlertTriangle, Search, RefreshCw, X, CheckCircle2, XCircle, Clock, Loader2 } from 'lucide-react';
 
 const severityColors = {
     CRITICAL: 'var(--critical)',
@@ -39,9 +39,6 @@ export default function Dashboard() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [scanStatus, setScanStatus] = useState('');
-    const [initMode, setInitMode] = useState('api');
-    const [mitreDir, setMitreDir] = useState('');
-    const [mitreFile, setMitreFile] = useState(null);
     const [expandedCve, setExpandedCve] = useState(null);
     const [cveDetail, setCveDetail] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
@@ -155,24 +152,6 @@ export default function Dashboard() {
             const result = await triggerScan();
             startTask(result.task_id, 'CVE Scan');
             setScanStatus('');
-        } catch (e) {
-            setScanStatus(`Error: ${e.message}`);
-        }
-    };
-
-    const handleInitDB = async () => {
-        setScanStatus('');
-        try {
-            if (initMode === 'upload' && mitreFile) {
-                const result = await uploadMitreData(mitreFile);
-                startTask(result.task_id, 'MITRE Upload');
-            } else if (initMode === 'local' && mitreDir) {
-                const result = await initializeDBLocal(mitreDir);
-                startTask(result.task_id, 'Local DB Init');
-            } else {
-                const result = await initializeDB();
-                startTask(result.task_id, 'DB Init (NVD + KEV + RedHat)');
-            }
         } catch (e) {
             setScanStatus(`Error: ${e.message}`);
         }
@@ -356,7 +335,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            <div className="grid-2 mb-24">
+            <div className="mb-24">
                 {/* Severity Distribution */}
                 <div className="card">
                     <div className="card-header">
@@ -378,65 +357,6 @@ export default function Dashboard() {
                             </div>
                         ))}
                     </div>
-                </div>
-
-                {/* DB Initialize */}
-                <div className="card">
-                    <div className="card-header">
-                        <div className="card-title">Database Initialization</div>
-                    </div>
-                    <p className="text-sm text-muted mb-16">
-                        Pull CVEs from NVD, CISA KEV, and RedHat via API. Upload MITRE data separately.
-                    </p>
-
-                    <div className="form-group" style={{ marginBottom: 12 }}>
-                        <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                <input type="radio" name="initMode" checked={initMode === 'api'} onChange={() => setInitMode('api')} />
-                                <span className="text-sm">API (NVD + KEV + RedHat)</span>
-                            </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                <input type="radio" name="initMode" checked={initMode === 'upload'} onChange={() => setInitMode('upload')} />
-                                <span className="text-sm">Upload MITRE ZIP</span>
-                            </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                <input type="radio" name="initMode" checked={initMode === 'local'} onChange={() => setInitMode('local')} />
-                                <span className="text-sm">Local Directory</span>
-                            </label>
-                        </div>
-
-                        {initMode === 'upload' && (
-                            <div className="form-group">
-                                <label className="form-label">MITRE cvelistV5 ZIP File</label>
-                                <input type="file" accept=".zip" className="form-input" style={{ padding: '8px 12px' }}
-                                    onChange={e => setMitreFile(e.target.files[0])} />
-                                <p className="text-xs text-muted" style={{ marginTop: 4 }}>
-                                    1. Clone: git clone https://github.com/CVEProject/cvelistV5.git<br />
-                                    2. ZIP the cves/ directory<br />
-                                    3. Upload the ZIP here
-                                </p>
-                            </div>
-                        )}
-
-                        {initMode === 'local' && (
-                            <div className="form-group">
-                                <label className="form-label">MITRE cvelistV5 Path</label>
-                                <input className="form-input" placeholder="/path/to/cvelistV5/cves"
-                                    value={mitreDir} onChange={e => setMitreDir(e.target.value)} />
-                                <p className="text-sm text-muted" style={{ marginTop: 4 }}>
-                                    git clone https://github.com/CVEProject/cvelistV5.git
-                                </p>
-                            </div>
-                        )}
-                    </div>
-
-                    <button className="btn btn-primary" onClick={handleInitDB}
-                        disabled={(activeTask && !activeTask.finished) || (initMode === 'upload' && !mitreFile)}>
-                        {activeTask && !activeTask.finished ? <><Loader2 size={14} className="spinning" /> Task Running...</> :
-                            initMode === 'upload' ? <><Upload size={14} /> Upload MITRE Data</> :
-                                initMode === 'local' ? <><FolderOpen size={14} /> Init from Local</> :
-                                    <><Database size={14} /> Initialize Database (API)</>}
-                    </button>
                 </div>
             </div>
 
