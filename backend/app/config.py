@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # WEBHOOK_EMAIL: email address used for CRM/webhook integration notifications
     health_recipients: str = Field(default="")
     scan_recipients: str = Field(default="")
+    feedback_recipients: str = Field(default="")
     webhook_email: str = Field(default="")
 
     # ── Scheduler ─────────────────────────────────────
@@ -81,6 +82,13 @@ class Settings(BaseSettings):
         """Recipients for scan summary emails (0-alert scans). Falls back to alert_recipients."""
         if self.scan_recipients:
             return [r.strip() for r in self.scan_recipients.split(",") if r.strip()]
+        return self.recipient_list
+
+    @property
+    def feedback_recipient_list(self) -> List[str]:
+        """Recipients for bug/suggestion feedback. Falls back to alert_recipients."""
+        if self.feedback_recipients:
+            return [r.strip() for r in self.feedback_recipients.split(",") if r.strip()]
         return self.recipient_list
 
     @property
