@@ -59,7 +59,7 @@ export default function App() {
                         ))}
                     </nav>
                     <div className="sidebar-footer">
-                        AbuseCVE v1.0.0 &middot; CTI Platform
+                        AbuseCVE v3.1.0 &middot; CTI Platform
                     </div>
                 </aside>
 
