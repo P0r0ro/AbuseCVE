@@ -5,7 +5,7 @@
     <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
         <div
             style="background: #1A1A2E; border-radius: 12px; border: 1px solid rgba(124, 58, 237, 0.3); padding: 30px;">
-            <h1 style="color: #A855F7; margin: 0 0 24px 0; text-align: center;">🔒 AbuseCVE Health Report (≖_≖ )</h1>
+            <h1 style="color: #A855F7; margin: 0 0 24px 0; text-align: center;"><span style="display:inline-block;width:10px;height:10px;background:#4ADE80;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE Health Report</h1>
 
             <!-- Component Status -->
             <h3 style="color: #7C3AED; margin: 0 0 12px 0;">Component Status</h3>
@@ -36,22 +36,22 @@
                 <h3 style="color: #7C3AED; margin: 0 0 12px 0;">Today's Summary</h3>
                 <table style="width: 100%; color: #E0E0E0; font-size: 14px;">
                     <tr>
-                        <td style="padding: 4px 0;">🆕 New CVEs Alerted</td>
+                        <td style="padding: 4px 0;"><span style="color:#4ADE80;">&#9679;</span> New CVEs Alerted</td>
                         <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.new_cves_alerted }}
                         </td>
                     </tr>
                     <tr>
-                        <td style="padding: 4px 0;">📋 Already Existing CVEs Seen</td>
+                        <td style="padding: 4px 0;"><span style="color:#7C3AED;">&#9679;</span> Already Existing CVEs Seen</td>
                         <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.existing_cves_seen
                             }}</td>
                     </tr>
                     <tr>
-                        <td style="padding: 4px 0;">🗄️ Total CVEs in Database</td>
+                        <td style="padding: 4px 0;"><span style="color:#A855F7;">&#9679;</span> Total CVEs in Database</td>
                         <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.total_cves_in_db }}
                         </td>
                     </tr>
                     <tr>
-                        <td style="padding: 4px 0;">🔍 Active Filter Rules</td>
+                        <td style="padding: 4px 0;"><span style="color:#00CED1;">&#9679;</span> Active Filter Rules</td>
                         <td style="padding: 4px 0; font-weight: bold; text-align: right;">{{ report.active_filters }}
                         </td>
                     </tr>
@@ -61,7 +61,7 @@
             {% if report.errors %}
             <div
                 style="background: rgba(255, 68, 68, 0.1); border-radius: 8px; padding: 16px; margin-bottom: 20px; border: 1px solid rgba(255, 68, 68, 0.3);">
-                <h3 style="color: #FF4444; margin: 0 0 8px 0;">⚠️ Errors</h3>
+                <h3 style="color: #FF4444; margin: 0 0 8px 0;">&#9650; Errors</h3>
                 {% for error in report.errors %}
                 <p style="color: #E0E0E0; font-size: 13px; margin: 4px 0;">{{ error.cve_id }}: {{ error.error }}</p>
                 {% endfor %}
@@ -70,7 +70,7 @@
 
             <div style="border-top: 1px solid rgba(124, 58, 237, 0.2); padding-top: 16px; margin-top: 16px;">
                 <p style="color: #666; font-size: 11px; text-align: center; margin: 0;">
-                    AbuseCVE (≖_≖ ) • {{ timestamp }}
+                    AbuseCVE • {{ timestamp }}
                 </p>
             </div>
         </div>

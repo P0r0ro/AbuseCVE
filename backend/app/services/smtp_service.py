@@ -163,7 +163,7 @@ async def send_cve_alert(cve_data: dict, rule_name: str = "") -> dict:
 
     severity = cve_data.get("severity", "UNKNOWN")
     cve_id = cve_data.get("cve_id", "UNKNOWN")
-    subject = f"🛡️ AbuseCVE Alert [{severity}] — {cve_id}"
+    subject = f"▸ AbuseCVE Alert [{severity}] — {cve_id}"
 
     # CVE alerts always go to alert recipients (analysts)
     return await send_email(subject=subject, html_body=html, recipients=settings.recipient_list)
@@ -180,7 +180,7 @@ async def send_health_report(report_data: dict) -> dict:
     except Exception:
         html = _fallback_health_html(report_data)
 
-    subject = f"🔒 AbuseCVE Daily Health Report — {datetime.utcnow().strftime('%Y-%m-%d')}"
+    subject = f"▸ AbuseCVE Health Report — {datetime.utcnow().strftime('%Y-%m-%d')}"
     return await send_email(
         subject=subject,
         html_body=html,
@@ -234,20 +234,20 @@ async def send_filter_test_email(
     <div style="font-family:'Inter',sans-serif;background:#0F0F1A;color:#E0E0E0;padding:40px;">
         <div style="max-width:600px;margin:0 auto;background:#1A1A2E;border-radius:12px;
                     border:1px solid rgba(124,58,237,0.3);padding:30px;">
-            <h1 style="color:#A855F7;margin:0 0 10px 0;">🧪 AbuseCVE Filter Test</h1>
+            <h1 style="color:#A855F7;margin:0 0 10px 0;"><span style="display:inline-block;width:10px;height:10px;background:#A855F7;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE Filter Test</h1>
             <p style="color:#888;margin:0 0 20px 0;">SMTP + Filter Pipeline Verification</p>
             <div style="margin:15px 0;padding:15px;background:rgba(124,58,237,0.1);border-radius:8px;">
                 <p><strong>Rule:</strong> {rule_name} (ID: {rule_id})</p>
                 <p><strong>PQL:</strong> <code style="color:#A855F7;">{pql[:200]}</code></p>
             </div>
             <div style="margin:15px 0;padding:15px;background:rgba(74,222,128,0.1);border-radius:8px;">
-                <p>📋 Total CVEs Tested: <strong>{total_tested:,}</strong></p>
-                <p>✅ Matches Found: <strong>{match_count:,}</strong> ({match_rate}%)</p>
-                <p>⏱️ Elapsed: <strong>{elapsed}s</strong></p>
+                <p><span style="color:#7C3AED;">&#9679;</span> Total CVEs Tested: <strong>{total_tested:,}</strong></p>
+                <p><span style="color:#4ADE80;">&#9679;</span> Matches Found: <strong>{match_count:,}</strong> ({match_rate}%)</p>
+                <p><span style="color:#00CED1;">&#9679;</span> Elapsed: <strong>{elapsed}s</strong></p>
             </div>
             {sample_table}
             <p style="color:#4ADE80;font-weight:bold;margin-top:20px;">
-                ✅ If you received this email, SMTP and the filter pipeline are working correctly.
+                <span style="color:#4ADE80;">&#10003;</span> If you received this email, SMTP and the filter pipeline are working correctly.
             </p>
             <p style="color:#888;font-size:12px;margin-top:15px;">
                 Sent at: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}
@@ -256,7 +256,7 @@ async def send_filter_test_email(
     </div>
     """
 
-    subject = f"🧪 AbuseCVE Filter Test — {rule_name}: {match_count} matches"
+    subject = f"▸ AbuseCVE Filter Test — {rule_name}: {match_count} matches"
     return await send_email(subject=subject, html_body=html)
 
 
@@ -313,16 +313,16 @@ async def send_scan_summary(scan_result: dict, matched_cves: list = None) -> dic
     <div style="font-family:'Inter',sans-serif;background:#0F0F1A;color:#E0E0E0;padding:40px;">
         <div style="max-width:600px;margin:0 auto;background:#1A1A2E;border-radius:12px;
                     border:1px solid rgba(124,58,237,0.3);padding:30px;">
-            <h1 style="color:#A855F7;margin:0 0 10px 0;">🔍 AbuseCVE Scan Summary</h1>
+            <h1 style="color:#A855F7;margin:0 0 10px 0;"><span style="display:inline-block;width:10px;height:10px;background:#A855F7;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE Scan Summary</h1>
             <div style="display:inline-block;background:{status_color};color:#fff;padding:4px 12px;
                         border-radius:6px;font-weight:bold;font-size:14px;">{status_text}</div>
             <div style="margin-top:20px;padding:15px;background:rgba(124,58,237,0.1);border-radius:8px;">
-                <p>📡 Total Fetched: <strong>{total_fetched}</strong></p>
-                <p>🔍 Matched Filters: <strong>{filtered}</strong></p>
-                <p>🆕 New CVEs Stored: <strong>{total_new}</strong></p>
-                <p>📬 Alerts Sent: <strong>{new_alerted}</strong></p>
-                <p>❌ Alerts Failed: <strong>{alerts_failed}</strong></p>
-                <p>🔄 Existing CVEs Updated: <strong>{existing}</strong></p>
+                <p><span style="color:#00CED1;">&#9679;</span> Total Fetched: <strong>{total_fetched}</strong></p>
+                <p><span style="color:#A855F7;">&#9679;</span> Matched Filters: <strong>{filtered}</strong></p>
+                <p><span style="color:#4ADE80;">&#9679;</span> New CVEs Stored: <strong>{total_new}</strong></p>
+                <p><span style="color:#4ADE80;">&#9679;</span> Alerts Sent: <strong>{new_alerted}</strong></p>
+                <p><span style="color:#FF4444;">&#9679;</span> Alerts Failed: <strong>{alerts_failed}</strong></p>
+                <p><span style="color:#FFD700;">&#9679;</span> Existing CVEs Updated: <strong>{existing}</strong></p>
             </div>
             {matched_table}
             <p style="color:#888;font-size:12px;margin-top:20px;">
@@ -332,7 +332,7 @@ async def send_scan_summary(scan_result: dict, matched_cves: list = None) -> dic
     </div>
     """
 
-    subject = f"🔍 AbuseCVE Scan — {new_alerted} alerts, {total_fetched} fetched"
+    subject = f"▸ AbuseCVE Scan — {new_alerted} alerts, {total_fetched} fetched"
 
     # Route: scans with alerts go to analysts; 0-alert scans go to admin/scan recipients only
     if new_alerted > 0:
@@ -349,7 +349,7 @@ async def send_test_email() -> dict:
     <div style="font-family: 'Inter', sans-serif; background: #0F0F1A; color: #E0E0E0; padding: 40px;">
         <div style="max-width: 600px; margin: 0 auto; background: #1A1A2E; border-radius: 12px;
                     border: 1px solid rgba(124, 58, 237, 0.3); padding: 40px;">
-            <h1 style="color: #A855F7; margin: 0 0 20px 0;">🛡️ AbuseCVE (≖_≖ )</h1>
+            <h1 style="color: #A855F7; margin: 0 0 20px 0;"><span style="display:inline-block;width:10px;height:10px;background:#4ADE80;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE</h1>
             <h2 style="color: #7C3AED;">SMTP Test Successful!</h2>
             <p>Your SMTP configuration is working correctly.</p>
             <p style="color: #888; font-size: 12px;">Sent at: {}</p>
@@ -358,7 +358,7 @@ async def send_test_email() -> dict:
     """.format(datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
 
     return await send_email(
-        subject="🛡️ AbuseCVE — SMTP Test",
+        subject="▸ AbuseCVE — SMTP Test",
         html_body=html,
     )
 
@@ -390,7 +390,7 @@ def _fallback_alert_html(cve: dict, rule_name: str) -> str:
     <div style="font-family: 'Inter', sans-serif; background: #0F0F1A; color: #E0E0E0; padding: 40px;">
         <div style="max-width: 600px; margin: 0 auto; background: #1A1A2E; border-radius: 12px;
                     border: 1px solid rgba(124, 58, 237, 0.3); padding: 30px;">
-            <h1 style="color: #A855F7; margin: 0 0 10px 0;">🛡️ AbuseCVE Alert (≖_≖ )</h1>
+            <h1 style="color: #A855F7; margin: 0 0 10px 0;"><span style="display:inline-block;width:10px;height:10px;background:#A855F7;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE Alert</h1>
             <div style="display: inline-block; background: {color}; color: #fff; padding: 4px 12px;
                         border-radius: 6px; font-weight: bold; font-size: 14px;">{severity}</div>
             <h2 style="color: #fff; margin: 20px 0 10px 0;">{cve.get("cve_id", "N/A")}</h2>
@@ -402,7 +402,7 @@ def _fallback_alert_html(cve: dict, rule_name: str) -> str:
             <hr style="border-color: rgba(124,58,237,0.2);">
             <p>{cve.get("description", "No description available.")}</p>
             {"<p><strong>Matched Rule:</strong> " + rule_name + "</p>" if rule_name else ""}
-            <p><strong>KEV:</strong> {"⚠️ Yes — Known Exploited" if cve.get("kev_flag") else "No"}</p>
+            <p><strong>KEV:</strong> {"<span style='color:#FF4444;'>&#9650;</span> Yes — Known Exploited" if cve.get("kev_flag") else "No"}</p>
             <p style="color: #888; font-size: 12px; margin-top: 20px;">
                 Source: {sources} |
                 Published: {cve.get("published_date", "N/A")}
@@ -427,7 +427,7 @@ def _fallback_health_html(report: dict) -> str:
     <div style="font-family: 'Inter', sans-serif; background: #0F0F1A; color: #E0E0E0; padding: 40px;">
         <div style="max-width: 600px; margin: 0 auto; background: #1A1A2E; border-radius: 12px;
                     border: 1px solid rgba(124, 58, 237, 0.3); padding: 30px;">
-            <h1 style="color: #A855F7; margin: 0 0 20px 0;">🔒 AbuseCVE Health Report (≖_≖ )</h1>
+            <h1 style="color: #A855F7; margin: 0 0 20px 0;"><span style="display:inline-block;width:10px;height:10px;background:#4ADE80;border-radius:50%;margin-right:10px;vertical-align:middle;"></span>AbuseCVE Health Report</h1>
             <table style="width: 100%; border-collapse: collapse;">
                 <tr><th style="text-align:left;padding:8px;color:#7C3AED;border-bottom:1px solid #333;">Component</th>
                     <th style="text-align:left;padding:8px;color:#7C3AED;border-bottom:1px solid #333;">Status</th></tr>
@@ -435,12 +435,12 @@ def _fallback_health_html(report: dict) -> str:
             </table>
             <div style="margin-top: 20px; padding: 15px; background: rgba(124,58,237,0.1); border-radius: 8px;">
                 <h3 style="color:#A855F7;margin:0 0 10px 0;">Today's Alert Activity</h3>
-                <p>✅ Alerts Sent Today: <strong>{report.get("new_cves_alerted", 0)}</strong></p>
-                <p>❌ Alerts Failed Today: <strong>{report.get("alerts_failed_today", 0)}</strong></p>
-                <p>🆕 New CVE Alerts Today: <strong>{report.get("new_cve_alerts_today", 0)}</strong></p>
-                <p>📋 Existing CVEs Seen: <strong>{report.get("existing_cves_seen", 0)}</strong></p>
-                <p>🗄️ Total CVEs in DB: <strong>{report.get("total_cves_in_db", 0)}</strong></p>
-                <p>🔍 Active Filters: <strong>{report.get("active_filters", 0)}</strong></p>
+                <p><span style="color:#4ADE80;">&#9679;</span> Alerts Sent Today: <strong>{report.get("new_cves_alerted", 0)}</strong></p>
+                <p><span style="color:#FF4444;">&#9679;</span> Alerts Failed Today: <strong>{report.get("alerts_failed_today", 0)}</strong></p>
+                <p><span style="color:#4ADE80;">&#9679;</span> New CVE Alerts Today: <strong>{report.get("new_cve_alerts_today", 0)}</strong></p>
+                <p><span style="color:#7C3AED;">&#9679;</span> Existing CVEs Seen: <strong>{report.get("existing_cves_seen", 0)}</strong></p>
+                <p><span style="color:#A855F7;">&#9679;</span> Total CVEs in DB: <strong>{report.get("total_cves_in_db", 0)}</strong></p>
+                <p><span style="color:#00CED1;">&#9679;</span> Active Filters: <strong>{report.get("active_filters", 0)}</strong></p>
             </div>
         </div>
     </div>
