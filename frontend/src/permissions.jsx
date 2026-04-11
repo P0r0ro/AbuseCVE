@@ -78,17 +78,29 @@ export function PermissionsProvider({ children }) {
         return true;
     };
 
+    // Action-level RBAC — admins always pass; SOC only if the
+    // matching `soc_<action>` toggle is explicitly enabled.
+    //   action: 'rule_create' | 'rule_refine' | 'rule_edit'
+    //         | 'rule_delete' | 'ka_delete'
+    const canPerform = (action) => {
+        if (!user) return false;
+        if (isAdmin) return true;
+        return toggles[`soc_${action}`] === true;
+    };
+
     const canDelete = (resource) => {
-        // SOC may never delete KAs or Rules
-        if (isSoc && (resource === 'knowledge_article' || resource === 'rule')) return false;
-        return isAuthenticated;
+        if (!isAuthenticated) return false;
+        if (isAdmin) return true;
+        if (resource === 'knowledge_article') return canPerform('ka_delete');
+        if (resource === 'rule') return canPerform('rule_delete');
+        return true;
     };
 
     return (
         <PermissionsContext.Provider value={{
             user, isAdmin, isSoc, isAuthenticated, loading,
             toggles, setToggles, refresh, login, logout,
-            canAccess, canDelete,
+            canAccess, canDelete, canPerform,
         }}>
             {children}
         </PermissionsContext.Provider>

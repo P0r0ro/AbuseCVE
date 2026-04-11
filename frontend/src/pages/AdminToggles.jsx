@@ -14,12 +14,22 @@ import { usePermissions } from '../permissions';
 
 const COMPONENT_LABELS = [
     { key: 'dashboard', label: 'Dashboard', description: 'Live CVE metrics and trigger scan button.' },
-    { key: 'rules_manager', label: 'Rules Manager', description: 'View / test file-based detection rules. (SOC cannot create or refine.)' },
+    { key: 'rules_manager', label: 'Rules Manager', description: 'View / test file-based detection rules. Write actions are controlled separately below.' },
     { key: 'alerts', label: 'Alerts', description: 'Triggered alert feed from the filter engine.' },
     { key: 'cve_database', label: 'CVE Database', description: 'Full CVE catalog with PQL search.' },
-    { key: 'knowledge', label: 'Knowledge Articles', description: 'Composed vulnerability reports. (SOC cannot delete.)' },
+    { key: 'knowledge', label: 'Knowledge Articles', description: 'Composed vulnerability reports.' },
     { key: 'logs', label: 'Logs', description: 'Worker / task / system log viewer.' },
     { key: 'health', label: 'Health Reports', description: 'Component status and uptime history.' },
+];
+
+// Per-action permissions granted to SOC users. Each key maps to a
+// middleware toggle (soc_<key>) enforced server-side in Redis.
+const ACTION_LABELS = [
+    { key: 'soc_rule_create', label: 'Create Rules', description: 'Allow SOC to add new rules via Rule Wizard or Advanced Mode.' },
+    { key: 'soc_rule_refine', label: 'Refine Rules', description: 'Allow SOC to append AND NOT negation logic to reduce false positives.' },
+    { key: 'soc_rule_edit', label: 'Edit Rules', description: 'Allow SOC to modify existing rules (name, description, PQL, enabled state).' },
+    { key: 'soc_rule_delete', label: 'Delete Rules', description: 'Allow SOC to permanently remove rules from abusecve_filters.yaml.' },
+    { key: 'soc_ka_delete', label: 'Delete Knowledge Articles', description: 'Allow SOC to permanently delete composed vulnerability reports.' },
 ];
 
 export default function AdminToggles() {
@@ -146,14 +156,73 @@ export default function AdminToggles() {
                 </div>
             </div>
 
+            <div className="card mt-20">
+                <div className="card-header">
+                    <div className="card-title">SOC Privileged Actions</div>
+                </div>
+                <div style={{ padding: '10px 20px 4px' }}>
+                    <p className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Grant SOC analysts the ability to perform specific write actions. Each toggle is
+                        enforced server-side by the RBAC middleware, so disabling it blocks the API call
+                        regardless of what the UI shows. All actions default to <strong>off</strong>.
+                    </p>
+                </div>
+                <div style={{ padding: 0 }}>
+                    {ACTION_LABELS.map((a, i) => {
+                        const enabled = toggles[a.key] === true;
+                        return (
+                            <div
+                                key={a.key}
+                                style={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                    padding: '16px 20px',
+                                    borderTop: '1px solid var(--border-subtle)',
+                                }}
+                            >
+                                <div style={{ flex: 1, paddingRight: 16 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        {enabled
+                                            ? <Unlock size={14} style={{ color: 'var(--success)' }} />
+                                            : <Lock size={14} style={{ color: 'var(--text-muted)' }} />
+                                        }
+                                        <span style={{ fontWeight: 600 }}>{a.label}</span>
+                                        <code style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.key}</code>
+                                    </div>
+                                    <div className="text-xs text-muted" style={{ marginTop: 4, paddingLeft: 22 }}>
+                                        {a.description}
+                                    </div>
+                                </div>
+                                <label style={{
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                    padding: '8px 14px',
+                                    background: enabled ? 'rgba(34,197,94,0.12)' : 'var(--bg-secondary)',
+                                    border: `1px solid ${enabled ? 'rgba(34,197,94,0.4)' : 'var(--border-subtle)'}`,
+                                    borderRadius: 8, cursor: saving === a.key ? 'wait' : 'pointer',
+                                    opacity: saving === a.key ? 0.6 : 1,
+                                }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={enabled}
+                                        disabled={saving === a.key}
+                                        onChange={e => handleToggle(a.key, e.target.checked)}
+                                        style={{ width: 16, height: 16, accentColor: 'var(--purple-500)' }}
+                                    />
+                                    <span className="text-xs" style={{ fontWeight: 700, textTransform: 'uppercase' }}>
+                                        {enabled ? 'SOC Allowed' : 'Admin Only'}
+                                    </span>
+                                </label>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
             <div className="card mt-20" style={{ padding: '14px 20px' }}>
                 <div className="text-xs text-muted">
                     <strong style={{ color: 'var(--purple-400)' }}>Always enforced (cannot be granted to SOC):</strong>
                     <ul style={{ margin: '6px 0 0 18px' }}>
                         <li>Integrations &amp; Webhooks (create / edit / delete)</li>
                         <li>Test Chain</li>
-                        <li>Delete on Knowledge Articles</li>
-                        <li>Create / Refine / Delete on Rules</li>
                     </ul>
                 </div>
             </div>

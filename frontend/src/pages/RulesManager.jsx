@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { getFilters, testFilterRule, reloadFilterRules, getQueryHelp, createFilterRule, getPqlAutocomplete } from '../api';
+import {
+    getFilters,
+    testFilterRule,
+    reloadFilterRules,
+    getQueryHelp,
+    createFilterRule,
+    updateFilterRule,
+    deleteFilterRule,
+    getPqlAutocomplete,
+} from '../api';
 import RefineModal from '../components/RefineModal';
 import { usePermissions } from '../permissions';
 import PqlInput from '../components/PqlInput';
@@ -8,7 +17,11 @@ const WIZARD_STEPS = ['Basics', 'Field Selectors', 'Review'];
 const SEVERITY_OPTS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 export default function RulesManager() {
-    const { isAdmin } = usePermissions();
+    const { isAdmin, canPerform } = usePermissions();
+    const canCreate = canPerform('rule_create');
+    const canRefine = canPerform('rule_refine');
+    const canEdit = canPerform('rule_edit');
+    const canDelete = canPerform('rule_delete');
 
     const [rules, setRules] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -19,6 +32,21 @@ export default function RulesManager() {
     const [expandedId, setExpandedId] = useState(null);
     const [reloadMsg, setReloadMsg] = useState('');
     const [refineRule, setRefineRule] = useState(null);
+
+    // ── Edit modal state ─────────────────────────
+    const [editRule, setEditRule] = useState(null);   // full rule being edited
+    const [editName, setEditName] = useState('');
+    const [editDesc, setEditDesc] = useState('');
+    const [editPql, setEditPql] = useState('');
+    const [editEnabled, setEditEnabled] = useState(true);
+    const [editAlertMod, setEditAlertMod] = useState(false);
+    const [editSaving, setEditSaving] = useState(false);
+    const [editMsg, setEditMsg] = useState('');
+
+    // ── Delete confirmation ──────────────────────
+    const [deleteRule, setDeleteRule] = useState(null);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteMsg, setDeleteMsg] = useState('');
 
     // ── Rule Wizard state ────────────────────────
     const [wizardOpen, setWizardOpen] = useState(false);
@@ -144,6 +172,67 @@ export default function RulesManager() {
         }
     };
 
+    const openEditModal = (rule) => {
+        setEditRule(rule);
+        setEditName(rule.name || '');
+        setEditDesc(rule.description || '');
+        setEditPql(rule.pql || '');
+        setEditEnabled(rule.enabled !== false);
+        setEditAlertMod(!!rule.alert_on_modified);
+        setEditMsg('');
+    };
+
+    const closeEditModal = () => {
+        setEditRule(null);
+        setEditMsg('');
+        setEditSaving(false);
+    };
+
+    const handleEditSave = async () => {
+        if (!editRule) return;
+        if (!editName.trim() || !editPql.trim()) {
+            setEditMsg('Name and PQL are required.');
+            return;
+        }
+        setEditSaving(true);
+        setEditMsg('');
+        try {
+            await updateFilterRule(editRule.id, {
+                name: editName.trim(),
+                description: editDesc,
+                pql: editPql.trim(),
+                enabled: editEnabled,
+                alert_on_modified: editAlertMod,
+            });
+            setEditMsg(`Rule ${editRule.id} updated and reloaded.`);
+            await fetchRules();
+            setTimeout(closeEditModal, 900);
+        } catch (e) {
+            setEditMsg('Save failed: ' + e.message);
+        } finally {
+            setEditSaving(false);
+        }
+    };
+
+    const handleDeleteConfirm = async () => {
+        if (!deleteRule) return;
+        setDeleting(true);
+        setDeleteMsg('');
+        try {
+            await deleteFilterRule(deleteRule.id);
+            setDeleteMsg(`Rule ${deleteRule.id} deleted.`);
+            await fetchRules();
+            setTimeout(() => {
+                setDeleteRule(null);
+                setDeleteMsg('');
+                setDeleting(false);
+            }, 800);
+        } catch (e) {
+            setDeleteMsg('Delete failed: ' + e.message);
+            setDeleting(false);
+        }
+    };
+
     const handleAdvancedSave = async () => {
         if (!advName.trim() || !advPql.trim()) {
             setAdvMsg('Name and PQL are required.');
@@ -191,7 +280,7 @@ export default function RulesManager() {
                     </p>
                 </div>
                 <div className="header-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {isAdmin && (
+                    {canCreate && (
                         <>
                             <button className="btn btn-primary" onClick={() => { resetWizard(); setWizardOpen(true); setAdvancedOpen(false); }}>+ Rule Wizard</button>
                             <button className="btn btn-secondary" onClick={() => { setAdvancedOpen(true); setWizardOpen(false); }}>Advanced Mode</button>
@@ -210,7 +299,7 @@ export default function RulesManager() {
             )}
 
             {/* ── Rule Wizard ── */}
-            {wizardOpen && isAdmin && (
+            {wizardOpen && canCreate && (
                 <div className="card mb-24">
                     <div className="card-header">
                         <div className="card-title">Rule Wizard</div>
@@ -341,7 +430,7 @@ export default function RulesManager() {
             )}
 
             {/* ── Advanced Mode ── */}
-            {advancedOpen && isAdmin && (
+            {advancedOpen && canCreate && (
                 <div className="card mb-24">
                     <div className="card-header">
                         <div className="card-title">Advanced Mode — Raw PQL Editor</div>
@@ -415,19 +504,35 @@ export default function RulesManager() {
                                         </td>
                                         <td>{r.alert_on_modified ? 'Yes' : '\u2014'}</td>
                                         <td>
-                                            <div style={{ display: 'flex', gap: 4 }}>
+                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                                                 <button className="btn btn-secondary"
                                                     style={{ padding: '4px 12px', fontSize: 12, color: 'var(--purple-400)' }}
                                                     disabled={testingId === r.id}
                                                     onClick={(e) => { e.stopPropagation(); handleTest(r.id); }}>
                                                     {testingId === r.id ? 'Testing...' : 'Test'}
                                                 </button>
-                                                {isAdmin && (
+                                                {canRefine && (
                                                     <button className="btn btn-secondary"
                                                         style={{ padding: '4px 10px', fontSize: 12 }}
                                                         onClick={(e) => { e.stopPropagation(); setRefineRule(r); }}
                                                         title="Refine this rule to reduce false positives">
                                                         Refine
+                                                    </button>
+                                                )}
+                                                {canEdit && (
+                                                    <button className="btn btn-secondary"
+                                                        style={{ padding: '4px 10px', fontSize: 12 }}
+                                                        onClick={(e) => { e.stopPropagation(); openEditModal(r); }}
+                                                        title="Edit this rule">
+                                                        Edit
+                                                    </button>
+                                                )}
+                                                {canDelete && (
+                                                    <button className="btn btn-secondary"
+                                                        style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                                                        onClick={(e) => { e.stopPropagation(); setDeleteRule(r); setDeleteMsg(''); }}
+                                                        title="Delete this rule">
+                                                        Delete
                                                     </button>
                                                 )}
                                             </div>
@@ -523,6 +628,141 @@ export default function RulesManager() {
                     onClose={() => setRefineRule(null)}
                     onSuccess={() => { fetchRules(); setRefineRule(null); }}
                 />
+            )}
+
+            {/* ── Edit Rule Modal ── */}
+            {editRule && (
+                <div
+                    style={{
+                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                        background: 'rgba(0,0,0,0.92)', zIndex: 1000,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        backdropFilter: 'blur(6px)', padding: 20,
+                    }}
+                    onClick={closeEditModal}
+                >
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                            background: 'var(--bg, #1a1a2e)', border: '1px solid rgba(124,58,237,0.4)',
+                            borderRadius: 12, padding: 24, width: '100%', maxWidth: 720,
+                            maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.8)',
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <h2 style={{ margin: 0, fontSize: 18 }}>
+                                Edit Rule <span style={{ color: 'var(--purple-400)' }}>#{editRule.id}</span>
+                            </h2>
+                            <button onClick={closeEditModal} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 20, cursor: 'pointer' }}>&times;</button>
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Rule Name</label>
+                            <input className="form-input" value={editName} onChange={e => setEditName(e.target.value)} />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">Description</label>
+                            <textarea className="form-textarea" rows={3} value={editDesc} onChange={e => setEditDesc(e.target.value)} />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">PQL</label>
+                            <PqlInput
+                                value={editPql}
+                                onChange={setEditPql}
+                                multiline
+                                rows={6}
+                                placeholder='(vendor:microsoft OR vendor:adobe) AND severity:CRITICAL,HIGH'
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                                <input type="checkbox" checked={editEnabled} onChange={e => setEditEnabled(e.target.checked)} style={{ accentColor: 'var(--purple-500)' }} />
+                                <span className="text-sm">Enabled</span>
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                                <input type="checkbox" checked={editAlertMod} onChange={e => setEditAlertMod(e.target.checked)} style={{ accentColor: 'var(--purple-500)' }} />
+                                <span className="text-sm">Alert on Modified CVEs</span>
+                            </label>
+                        </div>
+
+                        {editMsg && (
+                            <div className="text-sm" style={{
+                                padding: '8px 12px', marginBottom: 12, borderRadius: 6,
+                                background: editMsg.includes('failed') ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                                border: `1px solid ${editMsg.includes('failed') ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                                color: editMsg.includes('failed') ? 'var(--error)' : 'var(--success)',
+                            }}>
+                                {editMsg}
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+                            <button className="btn btn-secondary" onClick={closeEditModal} disabled={editSaving}>Cancel</button>
+                            <button className="btn btn-primary" onClick={handleEditSave} disabled={editSaving}>
+                                {editSaving ? 'Saving…' : 'Save Changes'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Delete Confirmation ── */}
+            {deleteRule && (
+                <div
+                    style={{
+                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                        background: 'rgba(0,0,0,0.92)', zIndex: 1000,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        backdropFilter: 'blur(6px)', padding: 20,
+                    }}
+                    onClick={() => !deleting && setDeleteRule(null)}
+                >
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                            background: 'var(--bg, #1a1a2e)', border: '1px solid rgba(239,68,68,0.4)',
+                            borderRadius: 12, padding: 24, width: '100%', maxWidth: 480,
+                            boxShadow: '0 16px 48px rgba(0,0,0,0.8)',
+                        }}
+                    >
+                        <h2 style={{ margin: '0 0 8px', fontSize: 18, color: 'var(--error)' }}>Delete Rule?</h2>
+                        <p className="text-sm text-muted" style={{ marginBottom: 12 }}>
+                            This will permanently remove rule <strong style={{ color: 'var(--text-primary)' }}>#{deleteRule.id} — {deleteRule.name}</strong> from
+                            <code> abusecve_filters.yaml</code>. A timestamped backup is created on the server before the write.
+                        </p>
+                        {deleteRule.pql && (
+                            <pre style={{
+                                fontFamily: 'monospace', fontSize: 11, padding: 10,
+                                background: 'rgba(0,0,0,0.3)', borderRadius: 6,
+                                color: '#A855F7', marginBottom: 12, whiteSpace: 'pre-wrap',
+                                maxHeight: 120, overflowY: 'auto',
+                            }}>
+                                {deleteRule.pql}
+                            </pre>
+                        )}
+                        {deleteMsg && (
+                            <div className="text-sm" style={{
+                                padding: '8px 12px', marginBottom: 12, borderRadius: 6,
+                                background: deleteMsg.includes('failed') ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                                border: `1px solid ${deleteMsg.includes('failed') ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                                color: deleteMsg.includes('failed') ? 'var(--error)' : 'var(--success)',
+                            }}>
+                                {deleteMsg}
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" disabled={deleting} onClick={() => setDeleteRule(null)}>Cancel</button>
+                            <button
+                                className="btn btn-primary"
+                                disabled={deleting}
+                                onClick={handleDeleteConfirm}
+                                style={{ background: 'var(--error)', borderColor: 'var(--error)' }}
+                            >
+                                {deleting ? 'Deleting…' : 'Delete Rule'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {showHelp && (

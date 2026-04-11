@@ -61,7 +61,14 @@ _redis = redis.Redis.from_url(
 )
 
 # Default toggle state — seeded on first boot if Redis has no record.
+#
+# Two categories:
+#   • SOC visibility      — which sidebar surfaces SOC sees at all
+#   • SOC privileged ops  — which write actions SOC is allowed to perform
+#                            (default OFF — admins grant them explicitly
+#                            via the Access Control page)
 DEFAULT_TOGGLES: Dict[str, bool] = {
+    # Visibility (true = SOC can see the page)
     "dashboard": True,
     "rules_manager": True,
     "alerts": True,
@@ -71,6 +78,12 @@ DEFAULT_TOGGLES: Dict[str, bool] = {
     "integrations": True,
     "test": True,
     "health": True,
+    # Privileged actions (true = SOC may perform the write)
+    "soc_rule_create": False,
+    "soc_rule_refine": False,
+    "soc_rule_delete": False,
+    "soc_rule_edit": False,
+    "soc_ka_delete": False,
 }
 
 

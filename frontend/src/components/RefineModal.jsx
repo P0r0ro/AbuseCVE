@@ -16,7 +16,10 @@ import { getFilter, refineFilterRule } from '../api';
 export default function RefineModal({ ruleId, ruleName, cveId, cveDetail, onClose, onSuccess }) {
     const [ruleData, setRuleData] = useState(null);
     const [loadingRule, setLoadingRule] = useState(true);
-    const [keyword, setKeyword] = useState('');
+    // Multi-keyword exclusion — each chip becomes a separate
+    // { type: 'keyword', value } negation when the rule is saved.
+    const [keywordChips, setKeywordChips] = useState([]);
+    const [keywordDraft, setKeywordDraft] = useState('');
     const [productVal, setProductVal] = useState('');
     const [versionVal, setVersionVal] = useState('');
     const [cvssVal, setCvssVal] = useState('');
@@ -28,6 +31,40 @@ export default function RefineModal({ ruleId, ruleName, cveId, cveDetail, onClos
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(false);
+
+    const commitKeywordDraft = () => {
+        const raw = keywordDraft.trim();
+        if (!raw) return;
+        // Support pasting multiple comma-separated keywords at once
+        const pieces = raw.split(',').map(s => s.trim()).filter(Boolean);
+        if (!pieces.length) return;
+        setKeywordChips(prev => {
+            const seen = new Set(prev.map(k => k.toLowerCase()));
+            const next = [...prev];
+            for (const p of pieces) {
+                if (!seen.has(p.toLowerCase())) {
+                    next.push(p);
+                    seen.add(p.toLowerCase());
+                }
+            }
+            return next;
+        });
+        setKeywordDraft('');
+    };
+
+    const removeKeywordChip = (idx) => {
+        setKeywordChips(prev => prev.filter((_, i) => i !== idx));
+    };
+
+    const handleKeywordKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            commitKeywordDraft();
+        } else if (e.key === 'Backspace' && !keywordDraft && keywordChips.length) {
+            // Pop the last chip on backspace from an empty input
+            setKeywordChips(prev => prev.slice(0, -1));
+        }
+    };
 
     // Pre-fill product from CVE detail
     useEffect(() => {
@@ -51,7 +88,17 @@ export default function RefineModal({ ruleId, ruleName, cveId, cveDetail, onClos
 
     const buildNegations = () => {
         const negs = [];
-        if (useKeyword && keyword.trim()) negs.push({ type: 'keyword', value: keyword.trim() });
+        if (useKeyword) {
+            // Commit any pending draft and emit one negation per chip.
+            const pending = keywordDraft.trim();
+            const allChips = [...keywordChips];
+            if (pending && !allChips.some(k => k.toLowerCase() === pending.toLowerCase())) {
+                allChips.push(pending);
+            }
+            for (const kw of allChips) {
+                if (kw) negs.push({ type: 'keyword', value: kw });
+            }
+        }
         if (useProduct && productVal.trim()) negs.push({ type: 'product', value: productVal.trim() });
         if (useVersion && versionVal.trim()) negs.push({ type: 'version', value: versionVal.trim() });
         if (useCvss && cvssVal.trim()) negs.push({ type: 'cvss', value: cvssVal.trim() });
@@ -153,11 +200,82 @@ export default function RefineModal({ ruleId, ruleName, cveId, cveDetail, onClos
                         <div style={{ marginBottom: 16 }}>
                             <div className="text-sm" style={{ fontWeight: 600, marginBottom: 8 }}>Negation Criteria:</div>
 
-                            <div style={checkRow}>
-                                <input type="checkbox" checked={useKeyword} onChange={e => setUseKeyword(e.target.checked)} id="neg-kw" />
-                                <label htmlFor="neg-kw" className="text-sm" style={{ whiteSpace: 'nowrap' }}>Exclude keyword in description:</label>
-                                <input style={inputStyle} placeholder="e.g. print spooler, legacy version"
-                                    value={keyword} onChange={e => setKeyword(e.target.value)} disabled={!useKeyword} />
+                            <div style={{ ...checkRow, alignItems: 'flex-start' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={useKeyword}
+                                    onChange={e => setUseKeyword(e.target.checked)}
+                                    id="neg-kw"
+                                    style={{ marginTop: 6 }}
+                                />
+                                <label htmlFor="neg-kw" className="text-sm" style={{ whiteSpace: 'nowrap', marginTop: 4 }}>
+                                    Exclude keywords in description:
+                                </label>
+                                <div style={{ flex: 1 }}>
+                                    <div
+                                        onClick={() => {
+                                            if (!useKeyword) return;
+                                            const el = document.getElementById('neg-kw-input');
+                                            if (el) el.focus();
+                                        }}
+                                        style={{
+                                            display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+                                            padding: '6px 8px', minHeight: 32,
+                                            background: 'var(--card-bg)', border: '1px solid var(--border)',
+                                            borderRadius: 6, cursor: useKeyword ? 'text' : 'not-allowed',
+                                            opacity: useKeyword ? 1 : 0.5,
+                                        }}
+                                    >
+                                        {keywordChips.map((kw, i) => (
+                                            <span
+                                                key={`${kw}-${i}`}
+                                                style={{
+                                                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                                                    padding: '3px 8px', fontSize: 12,
+                                                    background: 'rgba(124,58,237,0.18)',
+                                                    border: '1px solid rgba(124,58,237,0.4)',
+                                                    borderRadius: 999, color: 'var(--text-primary)',
+                                                }}
+                                            >
+                                                {kw}
+                                                {useKeyword && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); removeKeywordChip(i); }}
+                                                        style={{
+                                                            background: 'none', border: 'none', padding: 0,
+                                                            color: 'var(--text-muted)', cursor: 'pointer',
+                                                            fontSize: 14, lineHeight: 1,
+                                                        }}
+                                                        aria-label={`Remove ${kw}`}
+                                                    >
+                                                        &times;
+                                                    </button>
+                                                )}
+                                            </span>
+                                        ))}
+                                        <input
+                                            id="neg-kw-input"
+                                            type="text"
+                                            value={keywordDraft}
+                                            onChange={e => setKeywordDraft(e.target.value)}
+                                            onKeyDown={handleKeywordKeyDown}
+                                            onBlur={commitKeywordDraft}
+                                            disabled={!useKeyword}
+                                            placeholder={keywordChips.length ? '' : 'e.g. print spooler, legacy — Enter or comma to add'}
+                                            style={{
+                                                flex: 1, minWidth: 140, border: 'none', outline: 'none',
+                                                background: 'transparent', color: 'var(--text-primary)',
+                                                fontSize: 13, padding: '2px 4px',
+                                            }}
+                                        />
+                                    </div>
+                                    {useKeyword && keywordChips.length > 0 && (
+                                        <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                                            {keywordChips.length} keyword{keywordChips.length === 1 ? '' : 's'} — each added as a separate <code>NOT description:"..."</code> clause.
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             <div style={checkRow}>

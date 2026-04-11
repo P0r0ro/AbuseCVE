@@ -56,6 +56,15 @@ class CreateRuleRequest(BaseModel):
     id: Optional[int] = None  # auto-assigned if omitted
 
 
+class UpdateRuleRequest(BaseModel):
+    """Update an existing rule in abusecve_filters.yaml."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    pql: Optional[str] = Field(default=None, min_length=1)
+    enabled: Optional[bool] = None
+    alert_on_modified: Optional[bool] = None
+
+
 # ══════════════════════════════════════════════════════════
 # STATIC ROUTES — must be defined BEFORE /{rule_id}
 # ══════════════════════════════════════════════════════════
@@ -439,12 +448,10 @@ async def create_rule(data: CreateRuleRequest, request: Request):
     Used by the Rule Wizard and the Advanced Mode editor to persist
     analyst-authored rules directly to disk. Validates PQL before writing,
     creates a timestamped backup, and hot-reloads on success.
-    """
-    # RBAC check — block SOC users from mutating rules
-    user = getattr(request.state, "user", None)
-    if user and user.get("role") != "ADMIN":
-        raise HTTPException(status_code=403, detail="Admin privileges required")
 
+    RBAC is enforced centrally in the RBAC middleware based on the
+    ``soc_rule_create`` toggle.
+    """
     from app.engine.query_engine import parse_pql_to_conditions
 
     pql = data.pql.strip()
@@ -569,4 +576,209 @@ async def get_filter(rule_id: int):
         "alert_on_modified": rule["alert_on_modified"],
         "description": rule["description"],
         "pql": rule.get("pql", ""),
+    }
+
+
+@router.put("/{rule_id}")
+async def update_rule(rule_id: int, data: UpdateRuleRequest):
+    """Update an existing rule in abusecve_filters.yaml.
+
+    Only fields provided in the request body are modified. Validates
+    PQL before writing, creates a timestamped backup, and hot-reloads
+    on success. Restores the backup if the reload fails.
+
+    RBAC is enforced centrally in the middleware via the
+    ``soc_rule_edit`` toggle.
+    """
+    from app.engine.query_engine import parse_pql_to_conditions
+
+    rule = get_rule_by_id(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule ID {rule_id} not found")
+
+    # Validate PQL if provided
+    new_pql = None
+    if data.pql is not None:
+        new_pql = data.pql.strip()
+        if not new_pql:
+            raise HTTPException(status_code=400, detail="PQL cannot be empty")
+        try:
+            parse_pql_to_conditions(new_pql)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid PQL: {exc}")
+
+    rules_path = get_rules_path()
+    if not rules_path.exists():
+        raise HTTPException(status_code=500, detail=f"Rules file not found: {rules_path}")
+
+    backup_path = rules_path.with_suffix(
+        f".bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    shutil.copy2(rules_path, backup_path)
+    logger.info(f"Update: backed up rules to {backup_path}")
+
+    try:
+        from ruamel.yaml import YAML
+        from ruamel.yaml.scalarstring import LiteralScalarString
+
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.width = 4096
+
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            doc = yaml.load(fh)
+
+        rules_list = doc.get("rules") or doc.get("filter_rules") or []
+        target = None
+        for r in rules_list:
+            if int(r.get("id", -1)) == rule_id:
+                target = r
+                break
+
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rule ID {rule_id} not found in YAML file",
+            )
+
+        if data.name is not None:
+            target["name"] = data.name
+        if data.description is not None:
+            target["description"] = data.description
+        if data.enabled is not None:
+            target["enabled"] = bool(data.enabled)
+        if data.alert_on_modified is not None:
+            target["alert_on_modified"] = bool(data.alert_on_modified)
+        if new_pql is not None:
+            target["pql"] = LiteralScalarString(new_pql) if "\n" in new_pql else new_pql
+
+        with open(rules_path, "w", encoding="utf-8") as fh:
+            yaml.dump(doc, fh)
+
+        logger.info(f"Update: rule {rule_id} written to {rules_path}")
+
+    except HTTPException:
+        shutil.copy2(backup_path, rules_path)
+        raise
+    except Exception as exc:
+        logger.error(f"Update: write failed, restoring backup: {exc}")
+        shutil.copy2(backup_path, rules_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update YAML file: {exc}. Backup restored.",
+        )
+
+    try:
+        reloaded = reload_rules()
+        reloaded_rule = next((r for r in reloaded if r["id"] == rule_id), None)
+        if reloaded_rule is not None and new_pql and not reloaded_rule.get("enabled") and data.enabled is not False:
+            logger.error("Update: reloaded rule is disabled (PQL error), reverting")
+            shutil.copy2(backup_path, rules_path)
+            reload_rules()
+            raise HTTPException(
+                status_code=500,
+                detail="Rule was disabled after reload (PQL error). Reverted to backup.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Update: reload failed, restoring backup: {exc}")
+        shutil.copy2(backup_path, rules_path)
+        reload_rules()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reload failed after update: {exc}. Backup restored.",
+        )
+
+    refreshed = get_rule_by_id(rule_id) or {}
+    return {
+        "status": "ok",
+        "rule_id": rule_id,
+        "rule": {
+            "id": refreshed.get("id", rule_id),
+            "name": refreshed.get("name"),
+            "enabled": refreshed.get("enabled"),
+            "alert_on_modified": refreshed.get("alert_on_modified"),
+            "description": refreshed.get("description"),
+            "pql": refreshed.get("pql", ""),
+        },
+        "backup_path": str(backup_path),
+    }
+
+
+@router.delete("/{rule_id}")
+async def delete_rule(rule_id: int):
+    """Delete a rule from abusecve_filters.yaml.
+
+    Creates a timestamped backup, removes the entry, and hot-reloads.
+    RBAC is enforced centrally in the middleware via the
+    ``soc_rule_delete`` toggle.
+    """
+    rule = get_rule_by_id(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule ID {rule_id} not found")
+
+    rules_path = get_rules_path()
+    if not rules_path.exists():
+        raise HTTPException(status_code=500, detail=f"Rules file not found: {rules_path}")
+
+    backup_path = rules_path.with_suffix(
+        f".bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    shutil.copy2(rules_path, backup_path)
+    logger.info(f"Delete: backed up rules to {backup_path}")
+
+    try:
+        from ruamel.yaml import YAML
+
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.width = 4096
+
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            doc = yaml.load(fh)
+
+        key = "rules" if "rules" in doc else ("filter_rules" if "filter_rules" in doc else None)
+        if key is None:
+            raise HTTPException(status_code=500, detail="Rules list not found in YAML")
+
+        rules_list = doc[key]
+        before_count = len(rules_list)
+        doc[key] = [r for r in rules_list if int(r.get("id", -1)) != rule_id]
+        after_count = len(doc[key])
+
+        if before_count == after_count:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rule ID {rule_id} not found in YAML file",
+            )
+
+        with open(rules_path, "w", encoding="utf-8") as fh:
+            yaml.dump(doc, fh)
+
+        logger.info(f"Delete: removed rule {rule_id} from {rules_path}")
+
+    except HTTPException:
+        shutil.copy2(backup_path, rules_path)
+        raise
+    except Exception as exc:
+        logger.error(f"Delete: write failed, restoring backup: {exc}")
+        shutil.copy2(backup_path, rules_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update YAML file: {exc}. Backup restored.",
+        )
+
+    try:
+        reload_rules()
+    except Exception as exc:
+        shutil.copy2(backup_path, rules_path)
+        reload_rules()
+        raise HTTPException(status_code=500, detail=f"Reload failed: {exc}. Backup restored.")
+
+    return {
+        "status": "ok",
+        "rule_id": rule_id,
+        "name": rule.get("name"),
+        "backup_path": str(backup_path),
     }

@@ -56,11 +56,12 @@ app.add_middleware(
 # ── Auth middleware ────────────────────────────────
 # Attaches the current user (or None) to request.state so downstream
 # routes can enforce RBAC without re-parsing the token themselves.
-# Also enforces SOC restrictions centrally: blocks DELETE on KAs and
-# filter rules, and blocks all writes to integrations/webhooks.
+# Also enforces SOC restrictions centrally. Granular SOC permissions
+# (rule create/refine/edit/delete, KA delete) are driven by Redis
+# toggles under abusecve:toggles — admins grant them via Access Control.
 @app.middleware("http")
 async def rbac_middleware(request, call_next):
-    from app.api.routes_auth import resolve_user
+    from app.api.routes_auth import resolve_user, _load_toggles
 
     user = resolve_user(request)
     request.state.user = user
@@ -83,26 +84,56 @@ async def rbac_middleware(request, call_next):
 
         role = user.get("role")
         if role == "SOC":
+            toggles = _load_toggles()
+
+            def _soc_allowed(key: str) -> bool:
+                return toggles.get(key, False) is True
+
             # Block SOC writes on restricted surfaces
             blocked = False
+            reason = "SOC role cannot perform this action"
+
+            # ── Knowledge articles ─────────────────
             if path.startswith("/api/knowledge-articles") and method == "DELETE":
-                blocked = True
-            elif path.startswith("/api/filters") and (
-                method == "DELETE"
-                or path.startswith("/api/filters/create")
-                or path.startswith("/api/filters/refine")
-            ):
-                blocked = True
+                if not _soc_allowed("soc_ka_delete"):
+                    blocked = True
+                    reason = "SOC: knowledge article deletion is not enabled for your role"
+
+            # ── Filter rules ───────────────────────
+            elif path.startswith("/api/filters"):
+                # Map each write action to its toggle key
+                if path.startswith("/api/filters/create"):
+                    if not _soc_allowed("soc_rule_create"):
+                        blocked = True
+                        reason = "SOC: rule creation is not enabled for your role"
+                elif path.startswith("/api/filters/refine"):
+                    if not _soc_allowed("soc_rule_refine"):
+                        blocked = True
+                        reason = "SOC: rule refinement is not enabled for your role"
+                elif method == "DELETE":
+                    # /api/filters/{id}
+                    if not _soc_allowed("soc_rule_delete"):
+                        blocked = True
+                        reason = "SOC: rule deletion is not enabled for your role"
+                elif method in ("PUT", "PATCH"):
+                    # /api/filters/{id}
+                    if not _soc_allowed("soc_rule_edit"):
+                        blocked = True
+                        reason = "SOC: rule editing is not enabled for your role"
+
+            # ── Integrations / webhooks — always admin-only ──
             elif path.startswith("/api/integrations") and method != "GET":
                 blocked = True
+                reason = "SOC role cannot manage integrations"
+
+            # ── Admin toggles ──────────────────────
             elif path.startswith("/api/auth/toggles") and method != "GET":
                 blocked = True
+                reason = "SOC role cannot modify access control"
+
             if blocked:
                 from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    {"detail": "SOC role cannot perform this action"},
-                    status_code=403,
-                )
+                return JSONResponse({"detail": reason}, status_code=403)
 
     return await call_next(request)
 

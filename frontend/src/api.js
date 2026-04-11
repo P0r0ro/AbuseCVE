@@ -72,6 +72,8 @@ export const reloadFilterRules = () => request('/filters/reload', { method: 'POS
 export const getQueryHelp = () => request('/filters/query-help');
 export const refineFilterRule = (data) => request('/filters/refine', { method: 'POST', body: data });
 export const createFilterRule = (data) => request('/filters/create', { method: 'POST', body: data });
+export const updateFilterRule = (id, data) => request(`/filters/${id}`, { method: 'PUT', body: data });
+export const deleteFilterRule = (id) => request(`/filters/${id}`, { method: 'DELETE' });
 export const getPqlAutocomplete = () => request('/filters/autocomplete');
 
 // ── Auth / Permissions ──────────────────────
