@@ -10,6 +10,7 @@ import {
     Webhook,
     Network,
     ShieldCheck,
+    UserCog,
     LogOut,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
@@ -22,6 +23,7 @@ import HealthReports from './pages/HealthReports';
 import Logs from './pages/Logs';
 import Integrations from './pages/Integrations';
 import Login from './pages/Login';
+import AdminToggles from './pages/AdminToggles';
 import { PermissionsProvider, usePermissions } from './permissions';
 
 // ── Nav items with permission guards ──────────
@@ -37,6 +39,7 @@ const navItems = [
     { path: '/integrations', icon: Webhook, label: 'Integrations', component: 'integrations', adminOnly: true },
     { path: '/test', icon: Network, label: 'Test Chain', component: 'test', adminOnly: true },
     { path: '/health', icon: ShieldCheck, label: 'Health Reports', component: 'health' },
+    { path: '/access', icon: UserCog, label: 'Access Control', component: 'admin_toggles', adminOnly: true },
 ];
 
 function AppShell() {
@@ -105,6 +108,7 @@ function AppShell() {
                         <Route path="/integrations" element={isAdmin ? <Integrations /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/test" element={isAdmin ? <TestPage /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/health" element={<HealthReports />} />
+                        <Route path="/access" element={isAdmin ? <AdminToggles /> : <Navigate to="/dashboard" replace />} />
                     </Routes>
                 </div>
             </div>

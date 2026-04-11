@@ -29,6 +29,7 @@ export default function RulesManager() {
     const [wizDesc, setWizDesc] = useState('');
     const [wizVendor, setWizVendor] = useState('');
     const [wizProduct, setWizProduct] = useState('');
+    const [wizDescKeyword, setWizDescKeyword] = useState('');
     const [wizSeverity, setWizSeverity] = useState([]);
     const [wizCvssMin, setWizCvssMin] = useState('');
     const [wizKev, setWizKev] = useState(false);
@@ -95,6 +96,7 @@ export default function RulesManager() {
         const parts = [];
         if (wizVendor.trim()) parts.push(`vendor:${wizVendor.trim()}`);
         if (wizProduct.trim()) parts.push(`product:${wizProduct.trim()}`);
+        if (wizDescKeyword.trim()) parts.push(`description:${wizDescKeyword.trim()}`);
         if (wizSeverity.length) parts.push(`severity:${wizSeverity.join(',')}`);
         if (wizCvssMin.trim()) parts.push(`cvss:>=${wizCvssMin.trim()}`);
         if (wizKev) parts.push('kev:true');
@@ -107,6 +109,7 @@ export default function RulesManager() {
         setWizDesc('');
         setWizVendor('');
         setWizProduct('');
+        setWizDescKeyword('');
         setWizSeverity([]);
         setWizCvssMin('');
         setWizKev(false);
@@ -250,6 +253,18 @@ export default function RulesManager() {
                                     </div>
                                 </div>
                                 <div className="form-group">
+                                    <label className="form-label">Description Keyword</label>
+                                    <input
+                                        className="form-input"
+                                        value={wizDescKeyword}
+                                        onChange={e => setWizDescKeyword(e.target.value)}
+                                        placeholder='e.g. "remote code execution" or rce'
+                                    />
+                                    <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                                        Full-text search against the CVE description. Matches are case-insensitive.
+                                    </div>
+                                </div>
+                                <div className="form-group">
                                     <label className="form-label">Severity</label>
                                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                                         {SEVERITY_OPTS.map(s => (
@@ -265,16 +280,27 @@ export default function RulesManager() {
                                         ))}
                                     </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'end' }}>
                                     <div className="form-group">
                                         <label className="form-label">Minimum CVSS</label>
                                         <input className="form-input" type="number" min="0" max="10" step="0.1" value={wizCvssMin} onChange={e => setWizCvssMin(e.target.value)} placeholder="e.g. 7.0" />
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">KEV Only</label>
-                                        <label className="toggle" style={{ marginTop: 8 }}>
-                                            <input type="checkbox" checked={wizKev} onChange={e => setWizKev(e.target.checked)} />
-                                            <span className="toggle-slider" />
+                                        <label style={{
+                                            display: 'flex', alignItems: 'center', gap: 10,
+                                            padding: '10px 14px',
+                                            background: wizKev ? 'rgba(124,58,237,0.2)' : 'var(--bg-secondary)',
+                                            border: `1px solid ${wizKev ? 'var(--border-accent)' : 'var(--border-subtle)'}`,
+                                            borderRadius: 8, cursor: 'pointer',
+                                        }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={wizKev}
+                                                onChange={e => setWizKev(e.target.checked)}
+                                                style={{ width: 16, height: 16, accentColor: 'var(--purple-500)' }}
+                                            />
+                                            <span className="text-sm">Only include CVEs in CISA KEV catalog</span>
                                         </label>
                                     </div>
                                 </div>

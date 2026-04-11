@@ -9,28 +9,31 @@ users are supported:
 The admin password is sourced from the ``ABUSECVE_ADMIN_PASSWORD``
 environment variable (default ``changeme`` for local dev).
 
-Tokens are opaque random strings stored in an in-memory session map.
-For deployments that require persistence across restarts, swap this
-for a Redis-backed store — the public surface stays the same.
+Session storage is Redis-backed so that multiple uvicorn workers share
+the same session state. The keys live under ``abusecve:session:<token>``
+with a 12-hour TTL, and admin toggles under ``abusecve:toggles``.
 
-SOC restrictions (enforced in the middleware helper and in route
-guards):
+SOC restrictions (enforced centrally by the middleware helper):
     • DELETE on knowledge articles
-    • DELETE on filter rules (and rule create/refine)
+    • Writes to filter rules (create / refine / delete)
     • All webhook / integration management
     • Admin toggle mutation
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+import redis
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +43,25 @@ router = APIRouter(prefix="/api/auth", tags=["Auth"])
 ADMIN_USERNAME = "admin"
 SOC_USERNAME = "soc"
 ADMIN_PASSWORD = os.environ.get("ABUSECVE_ADMIN_PASSWORD", "changeme")
-SESSION_TTL = timedelta(hours=12)
+SESSION_TTL_SECONDS = int(timedelta(hours=12).total_seconds())
 
-# ── In-memory session store (token → {user, expires_at}) ──
-_sessions: Dict[str, dict] = {}
+SESSION_KEY_PREFIX = "abusecve:session:"
+TOGGLES_KEY = "abusecve:toggles"
 
-# ── Admin toggles (component → enabled) ───────────────────
-# Admins can enable / disable critical suite components for SOC users.
-# SOC users read this map to decide which nav items to hide.
-_admin_toggles: Dict[str, bool] = {
+# ── Redis client (sync — used only inside route handlers / middleware) ──
+# A sync client is fine here because sessions are read once per request
+# and the payload is a single ~100-byte string. Using the async client
+# would require awaiting inside the middleware and would offer no
+# measurable benefit at this traffic level.
+_redis = redis.Redis.from_url(
+    settings.redis_url,
+    decode_responses=True,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+)
+
+# Default toggle state — seeded on first boot if Redis has no record.
+DEFAULT_TOGGLES: Dict[str, bool] = {
     "dashboard": True,
     "rules_manager": True,
     "alerts": True,
@@ -59,6 +72,30 @@ _admin_toggles: Dict[str, bool] = {
     "test": True,
     "health": True,
 }
+
+
+def _ensure_toggles_seeded() -> None:
+    """Populate the toggles hash on first use so reads never see None."""
+    try:
+        if not _redis.exists(TOGGLES_KEY):
+            _redis.hset(
+                TOGGLES_KEY,
+                mapping={k: "1" if v else "0" for k, v in DEFAULT_TOGGLES.items()},
+            )
+    except redis.RedisError as e:
+        logger.warning(f"Toggle seed skipped: {e}")
+
+
+def _load_toggles() -> Dict[str, bool]:
+    try:
+        _ensure_toggles_seeded()
+        raw = _redis.hgetall(TOGGLES_KEY)
+        if not raw:
+            return dict(DEFAULT_TOGGLES)
+        return {k: v == "1" for k, v in raw.items()}
+    except redis.RedisError as e:
+        logger.warning(f"Toggle load fell back to defaults: {e}")
+        return dict(DEFAULT_TOGGLES)
 
 
 class LoginRequest(BaseModel):
@@ -73,30 +110,34 @@ class ToggleRequest(BaseModel):
 
 def _issue_token(user: dict) -> str:
     token = secrets.token_urlsafe(32)
-    _sessions[token] = {
-        "user": user,
-        "expires_at": datetime.utcnow() + SESSION_TTL,
-    }
+    _redis.setex(
+        f"{SESSION_KEY_PREFIX}{token}",
+        SESSION_TTL_SECONDS,
+        json.dumps(user),
+    )
     return token
 
 
-def _get_session(token: Optional[str]) -> Optional[dict]:
+def _get_user(token: Optional[str]) -> Optional[dict]:
     if not token:
         return None
-    record = _sessions.get(token)
-    if not record:
+    try:
+        raw = _redis.get(f"{SESSION_KEY_PREFIX}{token}")
+    except redis.RedisError as e:
+        logger.error(f"Redis session lookup failed: {e}")
         return None
-    if record["expires_at"] < datetime.utcnow():
-        _sessions.pop(token, None)
+    if not raw:
         return None
-    return record
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
 
 
 def resolve_user(request: Request) -> Optional[dict]:
     """Helper used by middleware to attach the user to request.state."""
     token = request.headers.get("x-auth-token") or request.headers.get("X-Auth-Token")
-    record = _get_session(token)
-    return record["user"] if record else None
+    return _get_user(token)
 
 
 def require_admin(request: Request) -> dict:
@@ -143,7 +184,10 @@ async def login(data: LoginRequest):
 async def logout(request: Request):
     token = request.headers.get("x-auth-token") or request.headers.get("X-Auth-Token")
     if token:
-        _sessions.pop(token, None)
+        try:
+            _redis.delete(f"{SESSION_KEY_PREFIX}{token}")
+        except redis.RedisError:
+            pass
     return {"status": "ok"}
 
 
@@ -161,13 +205,17 @@ async def list_toggles(request: Request):
     user = resolve_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"toggles": _admin_toggles}
+    return {"toggles": _load_toggles()}
 
 
 @router.post("/toggles")
 async def set_toggle(data: ToggleRequest, request: Request):
     """Admin-only endpoint for enabling/disabling suite components for SOC."""
     require_admin(request)
-    _admin_toggles[data.component] = bool(data.enabled)
-    logger.info(f"Admin toggle: {data.component} → {data.enabled}")
-    return {"status": "ok", "toggles": _admin_toggles}
+    try:
+        _ensure_toggles_seeded()
+        _redis.hset(TOGGLES_KEY, data.component, "1" if data.enabled else "0")
+    except redis.RedisError as e:
+        raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
+    logger.info(f"Admin toggle: {data.component} -> {data.enabled}")
+    return {"status": "ok", "toggles": _load_toggles()}
