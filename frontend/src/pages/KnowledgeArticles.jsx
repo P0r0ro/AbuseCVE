@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getKAs, getKA, deleteKA, createKA, exportKA, lookupCVEs, previewKA } from '../api';
+import { usePermissions } from '../permissions';
 
 const STEPS = ['Header', 'Indicators', 'Synopsis', 'Mitigation', 'References', 'Preview'];
 
 export default function KnowledgeArticles() {
     const location = useLocation();
     const navigate = useNavigate();
+    const { canDelete } = usePermissions();
 
     const [kas, setKAs] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -188,6 +190,60 @@ export default function KnowledgeArticles() {
             alert('Export failed: ' + e.message);
         }
     };
+
+    // ── Markdown formatting helpers ──────────────
+    // Inserts markdown syntax at the textarea's cursor position without
+    // clobbering user content. Supports bold (**text**) and bullet list (* item).
+    const insertMarkdown = (textareaId, kind, current, setter) => {
+        const el = document.getElementById(textareaId);
+        if (!el) return;
+        const start = el.selectionStart ?? current.length;
+        const end = el.selectionEnd ?? current.length;
+        const before = current.slice(0, start);
+        const selected = current.slice(start, end);
+        const after = current.slice(end);
+        let insert = '';
+        let cursorOffset = 0;
+        if (kind === 'bold') {
+            const inner = selected || 'bold text';
+            insert = `**${inner}**`;
+            cursorOffset = selected ? insert.length : 2 + inner.length;
+        } else if (kind === 'bullet') {
+            // Start the bullet on its own line
+            const needsNewline = before.length > 0 && !before.endsWith('\n');
+            const prefix = needsNewline ? '\n' : '';
+            const inner = selected || 'list item';
+            insert = `${prefix}* ${inner}`;
+            cursorOffset = insert.length;
+        }
+        const next = before + insert + after;
+        setter(next);
+        // Restore caret after React re-render
+        requestAnimationFrame(() => {
+            const elAfter = document.getElementById(textareaId);
+            if (elAfter) {
+                const pos = before.length + cursorOffset;
+                elAfter.focus();
+                elAfter.setSelectionRange(pos, pos);
+            }
+        });
+    };
+
+    const FormatToolbar = ({ textareaId, value, onChange }) => (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <button type="button" className="btn btn-secondary btn-sm"
+                style={{ padding: '2px 10px', fontSize: 12, fontWeight: 700 }}
+                onClick={() => insertMarkdown(textareaId, 'bold', value, onChange)}
+                title="Bold — **text**">B</button>
+            <button type="button" className="btn btn-secondary btn-sm"
+                style={{ padding: '2px 10px', fontSize: 12 }}
+                onClick={() => insertMarkdown(textareaId, 'bullet', value, onChange)}
+                title="Bullet — * item">• List</button>
+            <span className="text-xs text-muted" style={{ alignSelf: 'center', marginLeft: 4 }}>
+                Markdown — **bold**, * bullet
+            </span>
+        </div>
+    );
 
     // Category helpers
     const updateCategory = (idx, field, value) => {
@@ -431,8 +487,12 @@ export default function KnowledgeArticles() {
                                         )}
                                         <div>
                                             <label className="form-label">Technical Analysis</label>
-                                            <textarea className="form-textarea" rows={6} style={{ minHeight: 120 }}
-                                                placeholder="Provide the detailed technical analysis here..."
+                                            <FormatToolbar
+                                                textareaId={`ka-analysis-${catIdx}`}
+                                                value={cat.analysis}
+                                                onChange={(v) => updateCategory(catIdx, 'analysis', v)} />
+                                            <textarea id={`ka-analysis-${catIdx}`} className="form-textarea" rows={6} style={{ minHeight: 120 }}
+                                                placeholder="Provide the detailed technical analysis here... Use **bold** and * bullet syntax."
                                                 value={cat.analysis} onChange={e => updateCategory(catIdx, 'analysis', e.target.value)} />
                                         </div>
                                     </div>
@@ -448,8 +508,12 @@ export default function KnowledgeArticles() {
                             <div>
                                 <div className="form-group">
                                     <label className="form-label">Mitigation / Remediation Steps</label>
-                                    <textarea className="form-textarea" rows={8} style={{ minHeight: 180 }}
-                                        placeholder="Describe the recommended mitigation strategy, software updates, workarounds..."
+                                    <FormatToolbar
+                                        textareaId="ka-mitigation"
+                                        value={mitigation}
+                                        onChange={setMitigation} />
+                                    <textarea id="ka-mitigation" className="form-textarea" rows={8} style={{ minHeight: 180 }}
+                                        placeholder="Describe the recommended mitigation strategy... Use **bold** and * bullet syntax."
                                         value={mitigation} onChange={e => setMitigation(e.target.value)} />
                                 </div>
                             </div>
@@ -612,8 +676,10 @@ export default function KnowledgeArticles() {
                                                         if (d.cve_ids?.length) lookupCVEs(d.cve_ids).then(r => setCveDetails(r.cves || [])).catch(() => {});
                                                     }} title="Edit / Clone">Edit</button>
                                             )}
-                                            <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
-                                                onClick={() => handleDelete(ka.id)} title="Delete">Del</button>
+                                            {canDelete('knowledge_article') && (
+                                                <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                                                    onClick={() => handleDelete(ka.id)} title="Delete">Del</button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>

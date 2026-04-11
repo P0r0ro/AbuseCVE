@@ -4,10 +4,22 @@
 
 const API_BASE = '/api';
 
+// Persist the session token so the user stays logged in across reloads.
+const TOKEN_KEY = 'abusecve_auth_token';
+
+function authHeaders() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    return token ? { 'X-Auth-Token': token } : {};
+}
+
 async function request(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const config = {
-        headers: { 'Content-Type': 'application/json', ...options.headers },
+        headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+            ...options.headers,
+        },
         ...options,
     };
 
@@ -25,13 +37,20 @@ async function request(endpoint, options = {}) {
 
 async function requestRaw(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
-    const res = await fetch(url, options);
+    const headers = { ...authHeaders(), ...(options.headers || {}) };
+    const res = await fetch(url, { ...options, headers });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(err.detail || `HTTP ${res.status}`);
     }
     return res;
 }
+
+export const setAuthToken = (token) => {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+};
+export const getAuthToken = () => localStorage.getItem(TOKEN_KEY);
 
 // ── Dashboard ────────────────────────────────
 export const getDashboardOverview = () => request('/dashboard/overview');
@@ -45,13 +64,23 @@ export const initializeDBLocal = (mitreDir, nvdDir) =>
 export const triggerScan = () => request('/dashboard/trigger-scan', { method: 'POST' });
 export const getTaskStatus = (taskId) => request(`/dashboard/task-status/${taskId}`);
 
-// ── Filters (file-based rules) ──────────────
+// ── Filters / Rules Manager (file-based rules) ──────────────
 export const getFilters = () => request('/filters');
 export const getFilter = (id) => request(`/filters/${id}`);
 export const testFilterRule = (data) => request('/filters/test', { method: 'POST', body: data });
 export const reloadFilterRules = () => request('/filters/reload', { method: 'POST' });
 export const getQueryHelp = () => request('/filters/query-help');
 export const refineFilterRule = (data) => request('/filters/refine', { method: 'POST', body: data });
+export const createFilterRule = (data) => request('/filters/create', { method: 'POST', body: data });
+export const getPqlAutocomplete = () => request('/filters/autocomplete');
+
+// ── Auth / Permissions ──────────────────────
+export const loginUser = (data) => request('/auth/login', { method: 'POST', body: data });
+export const getCurrentUser = () => request('/auth/me');
+export const logoutUser = () => request('/auth/logout', { method: 'POST' });
+export const getAdminToggles = () => request('/auth/toggles');
+export const setAdminToggle = (component, enabled) =>
+    request('/auth/toggles', { method: 'POST', body: { component, enabled } });
 
 // ── CVEs ─────────────────────────────────────
 export const getCVEs = (params = {}) => {

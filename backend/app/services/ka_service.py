@@ -34,7 +34,7 @@ def render_report_html(data: dict) -> str:
     user_interaction = data.get("user_interaction", False)
     is_batch = data.get("is_batch", False)
     categories = data.get("categories", [])
-    mitigation = _esc(data.get("mitigation", ""))
+    mitigation_raw = data.get("mitigation", "")
     references = data.get("references", [])
 
     # Styles
@@ -68,7 +68,7 @@ def render_report_html(data: dict) -> str:
             cat_name = _esc(cat.get("name", ""))
             component = _esc(cat.get("component", ""))
             cat_cves = cat.get("cve_ids", [])
-            analysis = _esc(cat.get("analysis", ""))
+            analysis = _md_to_html(cat.get("analysis", ""), body_style=BODY_STYLE)
 
             cat_cve_str = ", ".join(_esc(c) for c in cat_cves)
             heading = cat_name
@@ -78,23 +78,24 @@ def render_report_html(data: dict) -> str:
             html += f"""<div style="margin: 12px 0 16px 0; padding: 12px; border-left: 3px solid #7c3aed; background: #f8f6ff;">
 <p style="{BODY_FONT} font-weight: bold; font-size: 12pt; margin: 0 0 4px 0; color: #333;">{heading}</p>
 <p style="{BODY_FONT} color: #555; margin: 0 0 8px 0; font-size: 11pt;">CVE(s): {cat_cve_str}</p>
-<p style="{BODY_STYLE} margin: 0; white-space: pre-wrap;">{analysis}</p>
+<div style="{BODY_STYLE} margin: 0;">{analysis}</div>
 </div>
 """
     elif categories:
         # Single CVE with one category
         html += f'<p style="{SECTION_HEADING}">Synopsis</p>\n'
         for cat in categories:
-            analysis = _esc(cat.get("analysis", ""))
-            html += f'<p style="{BODY_STYLE} white-space: pre-wrap;">{analysis}</p>\n'
+            analysis = _md_to_html(cat.get("analysis", ""), body_style=BODY_STYLE)
+            html += f'<div style="{BODY_STYLE}">{analysis}</div>\n'
     else:
         html += f'<p style="{SECTION_HEADING}">Synopsis</p>\n'
         html += f'<p style="{BODY_STYLE}">No analysis provided.</p>\n'
 
     # Mitigation
-    if mitigation:
+    if mitigation_raw:
+        mitigation_html = _md_to_html(mitigation_raw, body_style=BODY_STYLE)
         html += f'<p style="{SECTION_HEADING}">Mitigation</p>\n'
-        html += f'<p style="{BODY_STYLE} white-space: pre-wrap;">{mitigation}</p>\n'
+        html += f'<div style="{BODY_STYLE}">{mitigation_html}</div>\n'
 
     # References
     if references:
@@ -123,10 +124,12 @@ def render_report_html_dark(data: dict) -> str:
     user_interaction = data.get("user_interaction", False)
     is_batch = data.get("is_batch", False)
     categories = data.get("categories", [])
-    mitigation = _esc(data.get("mitigation", ""))
+    mitigation_raw = data.get("mitigation", "")
     references = data.get("references", [])
 
     cve_str = ", ".join(_esc(c) for c in cve_ids)
+
+    DARK_BODY = "color:#E0E0E0;line-height:1.6;"
 
     html = f"""<div style="font-family:'Segoe UI','Inter',sans-serif;color:#E0E0E0;padding:30px;">
 <h1 style="font-family:'Shruti','Segoe UI',sans-serif;font-size:18pt;font-weight:bold;color:#A855F7;margin:0 0 4px 0;">Vulnerability Report</h1>
@@ -146,7 +149,7 @@ def render_report_html_dark(data: dict) -> str:
             cat_name = _esc(cat.get("name", ""))
             component = _esc(cat.get("component", ""))
             cat_cves = cat.get("cve_ids", [])
-            analysis = _esc(cat.get("analysis", ""))
+            analysis = _md_to_html(cat.get("analysis", ""), body_style=DARK_BODY)
             cat_cve_str = ", ".join(_esc(c) for c in cat_cves)
             heading = cat_name
             if component:
@@ -154,18 +157,19 @@ def render_report_html_dark(data: dict) -> str:
             html += f"""<div style="margin:10px 0 14px 0;padding:12px;border-left:3px solid #7C3AED;background:rgba(124,58,237,0.08);border-radius:0 8px 8px 0;">
 <p style="font-weight:bold;color:#C084FC;margin:0 0 4px 0;">{heading}</p>
 <p style="color:#888;font-size:11pt;margin:0 0 8px 0;">CVE(s): {cat_cve_str}</p>
-<p style="line-height:1.6;margin:0;white-space:pre-wrap;">{analysis}</p>
+<div style="{DARK_BODY}margin:0;">{analysis}</div>
 </div>
 """
     elif categories:
         html += '<h3 style="color:#A855F7;border-bottom:1px solid rgba(124,58,237,0.4);padding-bottom:6px;margin:20px 0 12px 0;">Synopsis</h3>\n'
         for cat in categories:
-            analysis = _esc(cat.get("analysis", ""))
-            html += f'<p style="line-height:1.6;white-space:pre-wrap;">{analysis}</p>\n'
+            analysis = _md_to_html(cat.get("analysis", ""), body_style=DARK_BODY)
+            html += f'<div style="{DARK_BODY}">{analysis}</div>\n'
 
-    if mitigation:
+    if mitigation_raw:
+        mitigation_html = _md_to_html(mitigation_raw, body_style=DARK_BODY)
         html += '<h3 style="color:#A855F7;border-bottom:1px solid rgba(124,58,237,0.4);padding-bottom:6px;margin:20px 0 12px 0;">Mitigation</h3>\n'
-        html += f'<p style="line-height:1.6;white-space:pre-wrap;">{mitigation}</p>\n'
+        html += f'<div style="{DARK_BODY}">{mitigation_html}</div>\n'
 
     if references:
         html += '<h3 style="color:#A855F7;border-bottom:1px solid rgba(124,58,237,0.4);padding-bottom:6px;margin:20px 0 12px 0;">References</h3>\n'
@@ -186,6 +190,57 @@ def _esc(text) -> str:
     if not text:
         return ""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+# Regex for markdown conversion — compiled once, reused everywhere.
+import re as _re
+
+_BOLD_RE = _re.compile(r"\*\*(.+?)\*\*", _re.DOTALL)
+
+
+def _md_to_html(text, body_style: str = "", bullet_style: str = "") -> str:
+    """Convert analyst-authored markdown to HTML.
+
+    Supports:
+      - **bold** → <strong>bold</strong>
+      - lines starting with "* " → <ul><li>...</li></ul>
+      - blank lines → paragraph breaks (<br/><br/>)
+
+    The input text is HTML-escaped first, so downstream rendering is safe
+    for pasting into CRM systems. Inline styles are optionally injected
+    so both the light (CRM) and dark (preview) renderers can share logic.
+    """
+    if not text:
+        return ""
+    escaped = _esc(text)
+    lines = escaped.split("\n")
+
+    html_parts: list[str] = []
+    in_list = False
+    for raw in lines:
+        stripped = raw.lstrip()
+        if stripped.startswith("* "):
+            if not in_list:
+                html_parts.append(f'<ul style="margin:6px 0;padding-left:22px;{bullet_style}">')
+                in_list = True
+            item = stripped[2:]
+            html_parts.append(f'<li style="{body_style} margin-bottom:4px;">{item}</li>')
+        else:
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            if raw.strip() == "":
+                html_parts.append("<br/>")
+            else:
+                html_parts.append(raw)
+                html_parts.append("<br/>")
+    if in_list:
+        html_parts.append("</ul>")
+
+    joined = "".join(html_parts)
+    # Inline bold conversion (safe — we've already escaped HTML)
+    joined = _BOLD_RE.sub(r"<strong>\1</strong>", joined)
+    return joined
 
 
 # ── Service Functions ────────────────────────────────────

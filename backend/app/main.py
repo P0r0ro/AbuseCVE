@@ -52,6 +52,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Auth middleware ────────────────────────────────
+# Attaches the current user (or None) to request.state so downstream
+# routes can enforce RBAC without re-parsing the token themselves.
+# Also enforces SOC restrictions centrally: blocks DELETE on KAs and
+# filter rules, and blocks all writes to integrations/webhooks.
+@app.middleware("http")
+async def rbac_middleware(request, call_next):
+    from app.api.routes_auth import resolve_user
+
+    user = resolve_user(request)
+    request.state.user = user
+
+    path = request.url.path
+    method = request.method.upper()
+
+    # Endpoints that never require auth — health probes and login.
+    public_prefixes = (
+        "/api/auth/login", "/api/health", "/api/auth/logout",
+    )
+    if path.startswith(public_prefixes) or path == "/":
+        return await call_next(request)
+
+    # All other /api/* routes require a valid session
+    if path.startswith("/api/"):
+        if not user:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+        role = user.get("role")
+        if role == "SOC":
+            # Block SOC writes on restricted surfaces
+            blocked = False
+            if path.startswith("/api/knowledge-articles") and method == "DELETE":
+                blocked = True
+            elif path.startswith("/api/filters") and (
+                method == "DELETE"
+                or path.startswith("/api/filters/create")
+                or path.startswith("/api/filters/refine")
+            ):
+                blocked = True
+            elif path.startswith("/api/integrations") and method != "GET":
+                blocked = True
+            elif path.startswith("/api/auth/toggles") and method != "GET":
+                blocked = True
+            if blocked:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    {"detail": "SOC role cannot perform this action"},
+                    status_code=403,
+                )
+
+    return await call_next(request)
+
 # ── Register API routes ──────────────────────────────
 from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_filters import router as filters_router
@@ -65,7 +119,9 @@ from app.api.routes_integrations import router as integrations_router
 from app.api.routes_export import router as export_router
 from app.api.routes_vendor_product import router as vendor_product_router
 from app.api.routes_feedback import router as feedback_router
+from app.api.routes_auth import router as auth_router
 
+app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(filters_router)
 app.include_router(cves_router)

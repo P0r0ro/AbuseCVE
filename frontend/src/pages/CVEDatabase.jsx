@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCVEs, searchCVEsByPQL, getQueryHelp, exportCVEsExcel } from '../api';
 import { Download, ClipboardList, Package, Search, X, ChevronDown, ChevronUp, AlertTriangle, BookOpen } from 'lucide-react';
+import PqlInput from '../components/PqlInput';
 
 const sourceColors = {
     NVD: '#6366F1',
@@ -154,21 +155,20 @@ export default function CVEDatabase() {
                                     }
                                 }}>? Help</button>
                         </label>
-                        <input className="form-input" style={{ fontFamily: 'monospace', fontSize: 13 }}
-                            placeholder='vendor:microsoft severity:HIGH,CRITICAL cvss:>7.0  OR  "buffer overflow"'
+                        <PqlInput
                             value={pqlQuery}
-                            onChange={e => setPqlQuery(e.target.value)}
-                            onKeyDown={async e => {
-                                if (e.key === 'Enter' && pqlQuery.trim()) {
-                                    setLoading(true);
-                                    try {
-                                        const data = await searchCVEsByPQL(pqlQuery, params.page, params.per_page);
-                                        setCves(data.cves || data.items || data.results || []);
-                                        setTotal(data.total || 0);
-                                        setPages(data.pages || 1);
-                                    } catch (e2) { console.error(e2); }
-                                    finally { setLoading(false); }
-                                }
+                            onChange={setPqlQuery}
+                            placeholder='vendor:microsoft severity:HIGH,CRITICAL cvss:>7.0  OR  "buffer overflow"'
+                            onEnter={async () => {
+                                if (!pqlQuery.trim()) return;
+                                setLoading(true);
+                                try {
+                                    const data = await searchCVEsByPQL(pqlQuery, params.page, params.per_page);
+                                    setCves(data.cves || data.items || data.results || []);
+                                    setTotal(data.total || 0);
+                                    setPages(data.pages || 1);
+                                } catch (e2) { console.error(e2); }
+                                finally { setLoading(false); }
                             }}
                         />
                         <span className="text-xs text-muted" style={{ marginTop: 4, display: 'block' }}>

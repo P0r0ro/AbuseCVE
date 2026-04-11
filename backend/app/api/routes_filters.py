@@ -11,7 +11,7 @@ import logging
 import shutil
 import time
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy import select as sa_select, func
@@ -44,6 +44,16 @@ class RefineFilterRequest(BaseModel):
     rule_id: int
     negations: List[Negation]
     preview_only: bool = Field(default=False, description="If true, return before/after without saving")
+
+
+class CreateRuleRequest(BaseModel):
+    """Append a new rule to abusecve_filters.yaml from the Rule Wizard."""
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    pql: str = Field(..., min_length=1)
+    enabled: bool = True
+    alert_on_modified: bool = False
+    id: Optional[int] = None  # auto-assigned if omitted
 
 
 # ══════════════════════════════════════════════════════════
@@ -419,6 +429,126 @@ async def refine_filter_rule(data: RefineFilterRequest):
         "original_pql": original_pql,
         "refined_pql": new_pql,
         "backup_path": str(backup_path),
+    }
+
+
+@router.post("/create")
+async def create_rule(data: CreateRuleRequest, request: Request):
+    """Append a new rule to abusecve_filters.yaml.
+
+    Used by the Rule Wizard and the Advanced Mode editor to persist
+    analyst-authored rules directly to disk. Validates PQL before writing,
+    creates a timestamped backup, and hot-reloads on success.
+    """
+    # RBAC check — block SOC users from mutating rules
+    user = getattr(request.state, "user", None)
+    if user and user.get("role") != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    from app.engine.query_engine import parse_pql_to_conditions
+
+    pql = data.pql.strip()
+    if not pql:
+        raise HTTPException(status_code=400, detail="PQL cannot be empty")
+
+    # 1. Validate the PQL parses
+    try:
+        parse_pql_to_conditions(pql)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid PQL: {exc}")
+
+    rules_path = get_rules_path()
+    if not rules_path.exists():
+        raise HTTPException(status_code=500, detail=f"Rules file not found: {rules_path}")
+
+    # 2. Backup
+    backup_path = rules_path.with_suffix(
+        f".bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    shutil.copy2(rules_path, backup_path)
+
+    try:
+        from ruamel.yaml import YAML
+        from ruamel.yaml.scalarstring import LiteralScalarString
+
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.width = 4096
+
+        with open(rules_path, "r", encoding="utf-8") as fh:
+            doc = yaml.load(fh)
+
+        rules_list = doc.get("rules") or doc.get("filter_rules") or []
+
+        # 3. Assign a new ID if not provided — use max existing + 1
+        existing_ids = {int(r.get("id", 0)) for r in rules_list if r.get("id") is not None}
+        new_id = data.id if data.id is not None else (max(existing_ids) + 1 if existing_ids else 1001)
+        if new_id in existing_ids:
+            raise HTTPException(status_code=409, detail=f"Rule ID {new_id} already exists")
+
+        # 4. Build the new rule entry
+        new_rule = {
+            "id": new_id,
+            "name": data.name,
+            "enabled": data.enabled,
+            "alert_on_modified": data.alert_on_modified,
+            "description": data.description or "",
+            "pql": LiteralScalarString(pql) if "\n" in pql else pql,
+        }
+
+        rules_list.append(new_rule)
+        if "rules" in doc:
+            doc["rules"] = rules_list
+        else:
+            doc["filter_rules"] = rules_list
+
+        with open(rules_path, "w", encoding="utf-8") as fh:
+            yaml.dump(doc, fh)
+
+        logger.info(f"Created rule {new_id} ({data.name}) in {rules_path}")
+
+    except HTTPException:
+        shutil.copy2(backup_path, rules_path)
+        raise
+    except Exception as exc:
+        logger.error(f"Create rule failed: {exc}, restoring backup")
+        shutil.copy2(backup_path, rules_path)
+        raise HTTPException(status_code=500, detail=f"Failed to write YAML: {exc}")
+
+    # 5. Hot-reload
+    try:
+        reload_rules()
+    except Exception as exc:
+        shutil.copy2(backup_path, rules_path)
+        reload_rules()
+        raise HTTPException(status_code=500, detail=f"Reload failed: {exc}. Backup restored.")
+
+    return {
+        "status": "ok",
+        "rule_id": new_id,
+        "name": data.name,
+        "pql": pql,
+        "backup_path": str(backup_path),
+    }
+
+
+@router.get("/autocomplete")
+async def pql_autocomplete():
+    """Return the keyword/operator list used by PQL auto-completion dropdowns."""
+    return {
+        "keywords": [
+            "vendor:", "product:", "severity:", "cvss:", "description:",
+            "kev:", "cve_id:", "source:", "cvss_vector:", "published_date:",
+            "modified_date:", "cpe_names:", "references:", "weaknesses:",
+            "affected_products:",
+        ],
+        "values": {
+            "severity": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+            "kev": ["true", "false"],
+            "source": ["NVD", "MITRE", "CISA_KEV", "REDHAT"],
+        },
+        "operators": ["AND", "OR", "NOT", "(", ")"],
+        "comparators": [":>=", ":>", ":<=", ":<", ":=", ":~", ":!"],
     }
 
 
