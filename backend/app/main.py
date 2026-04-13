@@ -72,6 +72,7 @@ async def rbac_middleware(request, call_next):
     # Endpoints that never require auth — health probes and login.
     public_prefixes = (
         "/api/auth/login", "/api/health", "/api/auth/logout",
+        "/api/vt-proxy",
     )
     if path.startswith(public_prefixes) or path == "/":
         return await call_next(request)
@@ -151,6 +152,7 @@ from app.api.routes_export import router as export_router
 from app.api.routes_vendor_product import router as vendor_product_router
 from app.api.routes_feedback import router as feedback_router
 from app.api.routes_auth import router as auth_router
+from app.api.routes_vt_proxy import router as vt_proxy_router
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
@@ -165,6 +167,7 @@ app.include_router(integrations_router)
 app.include_router(export_router)
 app.include_router(vendor_product_router)
 app.include_router(feedback_router)
+app.include_router(vt_proxy_router)
 
 
 @app.get("/api/health")
