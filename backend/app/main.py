@@ -72,7 +72,7 @@ async def rbac_middleware(request, call_next):
     # Endpoints that never require auth — health probes and login.
     public_prefixes = (
         "/api/auth/login", "/api/health", "/api/auth/logout",
-        "/api/vt-proxy",
+        "/api/vt-proxy", "/api/feedback",
     )
     if path.startswith(public_prefixes) or path == "/":
         return await call_next(request)
