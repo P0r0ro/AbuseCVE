@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════
+#  AbuseCVE — Push-to-Deploy
+# ═══════════════════════════════════════════════════════════════
+#  Rebuilds all AbuseCVE services (backend, frontend, worker, beat).
+#  deploy.sh runs Alembic migrations automatically after the backend
+#  is rebuilt.
+#
+#  Required repository secrets:
+#    VM_HOST, VM_USER, VM_SSH_KEY, VM_DEPLOY_PATH
+# ═══════════════════════════════════════════════════════════════
+name: Deploy AbuseCVE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: abusecve-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.VM_DEPLOY_PATH }}"
+            ./deploy.sh abusecve-backend abusecve-worker abusecve-beat abusecve-frontend
