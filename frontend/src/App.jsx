@@ -86,7 +86,13 @@ function AppShell() {
                     </nav>
                     <div className="sidebar-footer" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <div className="text-xs text-muted">
-                            Signed in as <strong style={{ color: 'var(--purple-400)' }}>{user?.username}</strong> ({user?.role})
+                            Signed in as <strong style={{ color: 'var(--purple-400)' }}>{user?.full_name || user?.username}</strong>
+                            <span style={{ marginLeft: 4 }}>({user?.role})</span>
+                            {user?.full_name && user?.username && (
+                                <div className="text-xs" style={{ color: 'var(--text-muted)', opacity: 0.7 }}>
+                                    @{user.username}
+                                </div>
+                            )}
                         </div>
                         <button className="btn btn-secondary btn-sm" onClick={logout} style={{ fontSize: 11, padding: '4px 10px' }}>
                             <LogOut size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Sign out

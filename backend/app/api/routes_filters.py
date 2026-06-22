@@ -17,8 +17,10 @@ from typing import List, Optional
 from sqlalchemy import select as sa_select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes_auth import resolve_user
 from app.database import get_db
 from app.engine.rule_loader import get_rules, get_rule_by_id, reload_rules, get_rules_path
+from app.services.audit_service import audit, audit_actions
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +275,7 @@ async def test_filter_rule(data: TestFilterRequest, db: AsyncSession = Depends(g
 
 
 @router.post("/refine")
-async def refine_filter_rule(data: RefineFilterRequest):
+async def refine_filter_rule(data: RefineFilterRequest, request: Request):
     """Refine a rule by appending AND NOT negation logic to its PQL.
 
     Used by the Rule Refinement Wizard to mitigate false positives.
@@ -431,6 +433,18 @@ async def refine_filter_rule(data: RefineFilterRequest):
         )
 
     logger.info(f"Refine: rule {data.rule_id} successfully refined and reloaded")
+    await audit(
+        action=audit_actions.RULE_REFINE,
+        actor=resolve_user(request),
+        target_type="rule",
+        target_id=data.rule_id,
+        metadata={
+            "rule_name":    rule["name"],
+            "original_pql": original_pql,
+            "refined_pql":  new_pql,
+        },
+        request=request,
+    )
     return {
         "status": "ok",
         "rule_id": data.rule_id,
@@ -530,6 +544,14 @@ async def create_rule(data: CreateRuleRequest, request: Request):
         reload_rules()
         raise HTTPException(status_code=500, detail=f"Reload failed: {exc}. Backup restored.")
 
+    await audit(
+        action=audit_actions.RULE_CREATE,
+        actor=resolve_user(request),
+        target_type="rule",
+        target_id=new_id,
+        metadata={"name": data.name, "pql": pql},
+        request=request,
+    )
     return {
         "status": "ok",
         "rule_id": new_id,
@@ -580,7 +602,7 @@ async def get_filter(rule_id: int):
 
 
 @router.put("/{rule_id}")
-async def update_rule(rule_id: int, data: UpdateRuleRequest):
+async def update_rule(rule_id: int, data: UpdateRuleRequest, request: Request):
     """Update an existing rule in abusecve_filters.yaml.
 
     Only fields provided in the request body are modified. Validates
@@ -691,6 +713,17 @@ async def update_rule(rule_id: int, data: UpdateRuleRequest):
         )
 
     refreshed = get_rule_by_id(rule_id) or {}
+    await audit(
+        action=audit_actions.RULE_UPDATE,
+        actor=resolve_user(request),
+        target_type="rule",
+        target_id=rule_id,
+        metadata={
+            "name": refreshed.get("name"),
+            "fields": [k for k, v in data.model_dump().items() if v is not None],
+        },
+        request=request,
+    )
     return {
         "status": "ok",
         "rule_id": rule_id,
@@ -707,7 +740,7 @@ async def update_rule(rule_id: int, data: UpdateRuleRequest):
 
 
 @router.delete("/{rule_id}")
-async def delete_rule(rule_id: int):
+async def delete_rule(rule_id: int, request: Request):
     """Delete a rule from abusecve_filters.yaml.
 
     Creates a timestamped backup, removes the entry, and hot-reloads.
@@ -776,6 +809,14 @@ async def delete_rule(rule_id: int):
         reload_rules()
         raise HTTPException(status_code=500, detail=f"Reload failed: {exc}. Backup restored.")
 
+    await audit(
+        action=audit_actions.RULE_DELETE,
+        actor=resolve_user(request),
+        target_type="rule",
+        target_id=rule_id,
+        metadata={"name": rule.get("name")},
+        request=request,
+    )
     return {
         "status": "ok",
         "rule_id": rule_id,

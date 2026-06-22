@@ -3,22 +3,17 @@ import { ShieldCheck, User, Lock } from 'lucide-react';
 import { usePermissions } from '../permissions';
 
 // ── AbuseSuite Login Page ─────────────────────────
-// Two authentication modes backed by the same endpoint:
-//   admin — requires a password (ADMIN role)
-//   soc   — password optional (SOC role, read-mostly access)
-//
-// Successful login hands back a short-lived token that the API
-// client then attaches to every request via the X-Auth-Token header.
+// Every account is backed by the ``users`` table now. The legacy ``soc``
+// shared account stays passwordless for back-compat (the backend accepts
+// any password — including an empty one — for that single username).
+// Named analyst accounts authenticate with their bcrypt password.
 
 export default function Login() {
     const { login } = usePermissions();
-    const [username, setUsername] = useState('admin');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-
-    const isAdmin = username.trim().toLowerCase() === 'admin';
-    const isSoc = username.trim().toLowerCase() === 'soc';
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -60,34 +55,25 @@ export default function Login() {
                             className="form-input"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
-                            placeholder="admin or soc"
+                            placeholder="your.username"
+                            autoComplete="username"
                             autoFocus
                         />
                     </div>
 
-                    {isAdmin && (
-                        <div className="form-group">
-                            <label className="form-label">
-                                <Lock size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Password
-                            </label>
-                            <input
-                                type="password"
-                                className="form-input"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                placeholder="Enter admin password"
-                            />
-                        </div>
-                    )}
-
-                    {isSoc && (
-                        <div className="card mb-20" style={{ padding: '10px 14px', borderColor: 'var(--border-accent)' }}>
-                            <span className="text-xs text-muted">
-                                SOC analysts may sign in without a password. Write operations
-                                (delete, integrations, webhook management) are disabled.
-                            </span>
-                        </div>
-                    )}
+                    <div className="form-group">
+                        <label className="form-label">
+                            <Lock size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Password
+                        </label>
+                        <input
+                            type="password"
+                            className="form-input"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Password"
+                            autoComplete="current-password"
+                        />
+                    </div>
 
                     {error && (
                         <div className="text-sm" style={{ color: 'var(--error)', marginBottom: 12 }}>{error}</div>
@@ -99,7 +85,7 @@ export default function Login() {
                 </form>
 
                 <div className="text-xs text-muted" style={{ textAlign: 'center', marginTop: 18 }}>
-                    AbuseSuite v3.2 · Role-based access
+                    AbuseSuite v3.3 · Account access required
                 </div>
             </div>
         </div>

@@ -170,11 +170,46 @@ def _severity_to_jira_priority(severity: Optional[str]) -> str:
     return mapping.get((severity or "").upper(), "Medium")
 
 
-async def dispatch_to_all_integrations(db_session, cve_dict: dict, rule_name: str = ""):
-    """Dispatch an alert to ALL enabled integrations.
+def _build_payload(
+    *,
+    event: str,
+    cve_dict: dict,
+    rule_name: str = "",
+    user: Optional[dict] = None,
+    case: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Single source of truth for the outbound JSON shape.
 
-    Called from cve_tasks after email alerts.
+    ``user`` and ``case`` are always present as keys so CRM templates
+    can reference ``{{user.full_name}}`` / ``{{case.alert_id}}`` even
+    when the trigger is system-generated (the keys hold ``None`` in
+    that case). The placeholder engine in ``_apply_template`` renders
+    those as empty strings, which is the right behaviour.
     """
+    from app.config import settings as app_settings
+
+    return {
+        "event":     event,
+        "source":    "AbuseCVE",
+        "timestamp": datetime.utcnow().isoformat(),
+        "cve":       cve_dict,
+        "rule_name": rule_name,
+        "contact_email": app_settings.webhook_email_address,
+        "user": {
+            "id":        (user or {}).get("id"),
+            "username":  (user or {}).get("username"),
+            "full_name": (user or {}).get("full_name"),
+        },
+        "case": case or {
+            "alert_id":  None,
+            "closed_at": None,
+            "notes":     None,
+        },
+    }
+
+
+async def _dispatch_payload_to_all(db_session, payload: Dict[str, Any]) -> None:
+    """Send a fully-built payload to every enabled integration."""
     from app.models.integration import Integration
     from sqlalchemy import select
 
@@ -182,30 +217,41 @@ async def dispatch_to_all_integrations(db_session, cve_dict: dict, rule_name: st
         select(Integration).where(Integration.enabled == True)
     )
     integrations = result.scalars().all()
-
     if not integrations:
         return
 
-    from app.config import settings as app_settings
-
-    payload = {
-        "event": "cve_alert",
-        "source": "AbuseCVE",
-        "timestamp": datetime.utcnow().isoformat(),
-        "cve": cve_dict,
-        "rule_name": rule_name,
-        "contact_email": app_settings.webhook_email_address,
-    }
-
     for integration in integrations:
         try:
-            result = await dispatch_webhook(integration, payload)
-            integration.last_used = datetime.utcnow()
-            integration.last_status = result.get("status", "unknown")
-            integration.last_error = result.get("error")
-            logger.info(f"Integration '{integration.name}' dispatch: {result.get('status')}")
-        except Exception as e:
-            integration.last_used = datetime.utcnow()
+            outcome = await dispatch_webhook(integration, payload)
+            integration.last_used   = datetime.utcnow()
+            integration.last_status = outcome.get("status", "unknown")
+            integration.last_error  = outcome.get("error")
+            logger.info(f"Integration '{integration.name}' dispatch: {outcome.get('status')}")
+        except Exception as e:  # noqa: BLE001
+            integration.last_used   = datetime.utcnow()
             integration.last_status = "failed"
-            integration.last_error = str(e)
+            integration.last_error  = str(e)
             logger.error(f"Integration '{integration.name}' failed: {e}")
+
+
+async def dispatch_to_all_integrations(db_session, cve_dict: dict, rule_name: str = ""):
+    """Automatic dispatch — system-generated CVE alert. No user context."""
+    payload = _build_payload(event="cve_alert", cve_dict=cve_dict, rule_name=rule_name)
+    await _dispatch_payload_to_all(db_session, payload)
+
+
+async def dispatch_case_close(db_session, cve_dict: dict, *, user: dict, case: dict, rule_name: str = ""):
+    """Analyst-triggered dispatch — fires when an alert is closed.
+
+    Carries the closing user's identity (``user.full_name`` / username)
+    and the case metadata (alert id, close timestamp, notes) so the
+    receiving CRM can attribute the case correctly.
+    """
+    payload = _build_payload(
+        event="case_closed",
+        cve_dict=cve_dict,
+        rule_name=rule_name,
+        user=user,
+        case=case,
+    )
+    await _dispatch_payload_to_all(db_session, payload)

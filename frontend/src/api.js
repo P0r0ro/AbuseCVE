@@ -84,6 +84,22 @@ export const getAdminToggles = () => request('/auth/toggles');
 export const setAdminToggle = (component, enabled) =>
     request('/auth/toggles', { method: 'POST', body: { component, enabled } });
 
+// ── Users (admin-only CRUD) ─────────────────
+export const listUsers = () => request('/auth/users');
+export const createUser = (data) => request('/auth/users', { method: 'POST', body: data });
+export const updateUser = (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: data });
+export const deactivateUser = (id) => request(`/auth/users/${id}`, { method: 'DELETE' });
+
+// ── Audit Log (admin-only) ──────────────────
+export const getAuditLog = (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== '' && v !== null) qs.set(k, v);
+    });
+    const qsStr = qs.toString();
+    return request(`/auth/audit-log${qsStr ? '?' + qsStr : ''}`);
+};
+
 // ── CVEs ─────────────────────────────────────
 export const getCVEs = (params = {}) => {
     const qs = new URLSearchParams();
@@ -112,6 +128,8 @@ export const getAlertStats = (params = {}) => {
     const qsStr = qs.toString();
     return request(`/alerts/stats${qsStr ? '?' + qsStr : ''}`);
 };
+export const closeAlert = (alertId, notes = '') =>
+    request(`/alerts/${alertId}/close`, { method: 'POST', body: { notes } });
 
 // ── Knowledge Articles ───────────────────────
 export const getKAs = () => request('/knowledge-articles');

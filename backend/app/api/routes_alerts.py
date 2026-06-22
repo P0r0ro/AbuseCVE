@@ -1,16 +1,24 @@
-"""Alerts API routes – view alert history and logs."""
+"""Alerts API routes – view alert history, logs, and case-close flow."""
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from typing import Optional, Tuple
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes_auth import require_auth
 from app.database import get_db
 from app.models.alert_log import AlertLog
+from app.models.cve import CVE
+from app.services.audit_service import audit, audit_actions
+from app.services.webhook_service import dispatch_case_close
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 
@@ -192,4 +200,113 @@ async def alert_stats(
         "sent_in_period": sent_in_period,
         "new_cve_alerts": new_cve_alerts,
         "period": period or "all",
+    }
+
+
+# ══════════════════════════════════════════════════════
+#  Case-close flow
+# ══════════════════════════════════════════════════════
+class CloseAlertRequest(BaseModel):
+    notes: Optional[str] = Field(None, max_length=4000)
+
+
+@router.post("/{alert_id}/close")
+async def close_alert(
+    alert_id: int,
+    data: CloseAlertRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Close an alert and fire a CRM webhook stamped with the analyst's identity.
+
+    The acting user's ``full_name`` (and ``username``/``id``) are written
+    into the outbound webhook payload under ``user.*`` so the receiving
+    CRM can attribute the case. The same identity is denormalized onto
+    ``alert_logs.closed_by_name`` for historical attribution.
+    """
+    user = require_auth(request)
+
+    result = await db.execute(select(AlertLog).where(AlertLog.id == alert_id))
+    alert: Optional[AlertLog] = result.scalar_one_or_none()
+    if alert is None:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+
+    if alert.status == "closed":
+        raise HTTPException(status_code=409, detail="Alert already closed")
+
+    closed_at = datetime.utcnow()
+    notes = (data.notes or "").strip() or None
+
+    await db.execute(
+        sql_update(AlertLog)
+        .where(AlertLog.id == alert_id)
+        .values(
+            status="closed",
+            closed_by_id   = user["id"],
+            closed_by_name = user.get("full_name") or user["username"],
+            closed_at      = closed_at,
+            close_notes    = notes,
+        )
+    )
+    await db.commit()
+
+    # Refresh so the response carries the full closed state.
+    result = await db.execute(select(AlertLog).where(AlertLog.id == alert_id))
+    alert = result.scalar_one()
+
+    # ── Fire the CRM webhook synchronously ──────────
+    # Synchronous (vs background task) so the analyst sees an explicit
+    # error if the CRM is down rather than discovering it via the
+    # Integrations page later.
+    cve_dict: dict = {}
+    cve_row = (
+        await db.execute(select(CVE).where(CVE.cve_id == alert.cve_id))
+    ).scalar_one_or_none()
+    if cve_row is not None:
+        try:
+            cve_dict = cve_row.to_dict()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"close_alert: cve.to_dict failed for {alert.cve_id}: {e}")
+            cve_dict = {"cve_id": alert.cve_id}
+    else:
+        cve_dict = {"cve_id": alert.cve_id}
+
+    webhook_error: Optional[str] = None
+    try:
+        await dispatch_case_close(
+            db,
+            cve_dict,
+            user={
+                "id":        user["id"],
+                "username":  user["username"],
+                "full_name": user.get("full_name"),
+            },
+            case={
+                "alert_id":  alert.id,
+                "closed_at": closed_at.isoformat(),
+                "notes":     notes,
+            },
+            rule_name=alert.rule_name or "",
+        )
+    except Exception as e:  # noqa: BLE001
+        webhook_error = f"{type(e).__name__}: {str(e)[:300]}"
+        logger.error(f"close_alert: webhook dispatch failed for alert {alert_id}: {e}")
+
+    await audit(
+        action=audit_actions.ALERT_CLOSE,
+        actor=user,
+        target_type="alert",
+        target_id=alert_id,
+        metadata={
+            "cve_id":        alert.cve_id,
+            "rule_name":     alert.rule_name,
+            "notes_present": notes is not None,
+            "webhook_error": webhook_error,
+        },
+        request=request,
+    )
+
+    return {
+        "alert": alert.to_dict(),
+        "webhook_error": webhook_error,
     }

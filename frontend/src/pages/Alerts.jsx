@@ -1,20 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getAlerts, getAlertStats, getCVE, exportAlertsExcel } from '../api';
+import { getAlerts, getAlertStats, getCVE, exportAlertsExcel, closeAlert } from '../api';
 import RefineModal from '../components/RefineModal';
-import { CheckCircle2, XCircle, Package, BadgePlus, RefreshCw, Download, ClipboardList, X, Send, Calendar, Search, AlertTriangle, ArrowRight } from 'lucide-react';
+import { CheckCircle2, XCircle, Package, BadgePlus, RefreshCw, Download, ClipboardList, X, Send, Calendar, Search, AlertTriangle, ArrowRight, FolderClosed } from 'lucide-react';
 
 const STATUS_COLORS = {
-    sent: 'var(--success)',
+    sent:   'var(--success)',
     failed: 'var(--error)',
     stored: 'var(--text-muted)',
+    closed: 'var(--purple-400)',
     unknown: 'var(--text-muted)',
 };
 
 const STATUS_OPTIONS = [
     { value: '', label: 'All Statuses' },
-    { value: 'sent', label: 'Sent' },
+    { value: 'sent',   label: 'Sent' },
     { value: 'failed', label: 'Failed' },
     { value: 'stored', label: 'Stored (no match)' },
+    { value: 'closed', label: 'Closed' },
 ];
 
 const ISNEW_OPTIONS = [
@@ -65,6 +67,10 @@ export default function Alerts() {
     // Refine modal state
     const [refineAlert, setRefineAlert] = useState(null);
     const [refineCveDetail, setRefineCveDetail] = useState(null);
+    const [closingAlert, setClosingAlert] = useState(null);
+    const [closeNotes, setCloseNotes] = useState('');
+    const [closeSubmitting, setCloseSubmitting] = useState(false);
+    const [closeError, setCloseError] = useState('');
 
     // Filters
     const [period, setPeriod] = useState('1d');
@@ -448,7 +454,8 @@ export default function Alerts() {
                                                 }}>
                                                     {a.status === 'sent' ? <><CheckCircle2 size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> sent</> :
                                                         a.status === 'failed' ? <><XCircle size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> failed</> :
-                                                            a.status === 'stored' ? <><Package size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> stored</> : a.status}
+                                                            a.status === 'stored' ? <><Package size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> stored</> :
+                                                                a.status === 'closed' ? <><FolderClosed size={12} style={{ verticalAlign: 'middle', marginRight: 3 }} /> closed</> : a.status}
                                                 </span>
                                             </td>
                                             <td>
@@ -470,15 +477,34 @@ export default function Alerts() {
                                             <td className="text-sm text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {a.error_message || '—'}
                                             </td>
-                                            <td>
+                                            <td style={{ whiteSpace: 'nowrap' }}>
                                                 {(a.filter_rule_id || a.rule_name) && (
                                                     <button
                                                         className="btn btn-secondary"
-                                                        style={{ padding: '2px 8px', fontSize: 11 }}
+                                                        style={{ padding: '2px 8px', fontSize: 11, marginRight: 4 }}
                                                         onClick={(e) => { e.stopPropagation(); handleOpenRefine(a); }}
                                                         title="Refine this rule to reduce false positives"
                                                     >
                                                         Refine
+                                                    </button>
+                                                )}
+                                                {a.status !== 'closed' && a.status !== 'stored' && (
+                                                    <button
+                                                        className="btn btn-secondary"
+                                                        style={{
+                                                            padding: '2px 8px', fontSize: 11,
+                                                            borderColor: 'rgba(124,58,237,0.4)',
+                                                            color: 'var(--purple-400)',
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setClosingAlert(a);
+                                                            setCloseNotes('');
+                                                            setCloseError('');
+                                                        }}
+                                                        title="Close this case and notify the CRM webhook"
+                                                    >
+                                                        <FolderClosed size={11} style={{ verticalAlign: 'middle', marginRight: 3 }} /> Close
                                                     </button>
                                                 )}
                                             </td>
@@ -487,6 +513,18 @@ export default function Alerts() {
                                             <tr>
                                                 <td colSpan="8" style={{ padding: 0, border: 'none' }}>
                                                     <div style={{ padding: '12px 24px', background: 'rgba(124,58,237,0.05)', borderLeft: '3px solid var(--purple-400)', animation: 'slideDown 0.2s ease' }}>
+                                                        {a.status === 'closed' && a.closed_by_name && (
+                                                            <div className="text-xs" style={{ marginBottom: 8, color: 'var(--purple-400)' }}>
+                                                                <FolderClosed size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                                                Closed by <strong>{a.closed_by_name}</strong>
+                                                                {a.closed_at && <> at {new Date(a.closed_at).toLocaleString()}</>}
+                                                                {a.close_notes && (
+                                                                    <div className="text-xs text-muted" style={{ marginTop: 4, paddingLeft: 16 }}>
+                                                                        Notes: {a.close_notes}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                         {loadingDetail ? (
                                                             <div className="loading"><div className="loading-spinner" style={{ width: 14, height: 14 }} />Loading...</div>
                                                         ) : cveDetail?.error ? (
@@ -543,6 +581,94 @@ export default function Alerts() {
                     onClose={() => { setRefineAlert(null); setRefineCveDetail(null); }}
                     onSuccess={() => fetchAlerts(true)}
                 />
+            )}
+
+            {/* Close Case Modal */}
+            {closingAlert && (
+                <div
+                    onClick={() => !closeSubmitting && setClosingAlert(null)}
+                    style={{
+                        position: 'fixed', inset: 0, zIndex: 1000,
+                        background: 'rgba(0,0,0,0.65)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        padding: 20,
+                    }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="card"
+                        style={{
+                            maxWidth: 520, width: '100%',
+                            padding: 24,
+                            border: '1px solid var(--border-accent)',
+                            boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                        }}
+                    >
+                        <h2 style={{ marginTop: 0, marginBottom: 6 }}>
+                            <FolderClosed size={18} style={{ verticalAlign: 'middle', marginRight: 6, color: 'var(--purple-400)' }} />
+                            Close case
+                        </h2>
+                        <div className="text-sm text-muted" style={{ marginBottom: 16 }}>
+                            <code style={{ color: 'var(--purple-400)' }}>{closingAlert.cve_id}</code>
+                            {closingAlert.rule_name && <> · {closingAlert.rule_name}</>}
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Closing notes (optional)</label>
+                            <textarea
+                                className="form-input"
+                                rows={4}
+                                value={closeNotes}
+                                onChange={(e) => setCloseNotes(e.target.value)}
+                                placeholder="Reason for closing, action taken, ticket reference…"
+                                maxLength={4000}
+                                autoFocus
+                            />
+                            <div className="text-xs text-muted">
+                                Notes are saved on the alert and forwarded to the CRM webhook under <code>case.notes</code>.
+                            </div>
+                        </div>
+
+                        {closeError && (
+                            <div className="text-sm" style={{ color: 'var(--error)', marginBottom: 12 }}>{closeError}</div>
+                        )}
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setClosingAlert(null)}
+                                disabled={closeSubmitting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                disabled={closeSubmitting}
+                                onClick={async () => {
+                                    setCloseSubmitting(true);
+                                    setCloseError('');
+                                    try {
+                                        const res = await closeAlert(closingAlert.id, closeNotes);
+                                        setClosingAlert(null);
+                                        await fetchAlerts(true);
+                                        if (res?.webhook_error) {
+                                            // Show as non-fatal warning — case is closed, but CRM didn't get it.
+                                            alert(`Case closed, but CRM webhook failed:\n${res.webhook_error}`);
+                                        }
+                                    } catch (e) {
+                                        setCloseError(e.message);
+                                    } finally {
+                                        setCloseSubmitting(false);
+                                    }
+                                }}
+                            >
+                                {closeSubmitting ? 'Closing…' : 'Close case'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

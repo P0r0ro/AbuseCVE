@@ -1,21 +1,18 @@
 """AbuseSuite Authentication & RBAC routes.
 
-Lightweight role-based access control for the suite. Two built-in
-users are supported:
+Per-analyst login backed by the ``users`` table (Postgres). The legacy
+``soc`` shared account is preserved as a passwordless fallback during
+rollout — admins flip ``is_active=False`` on it from the Users page
+once every analyst has their own login.
 
-    admin  — ADMIN role, password-protected. Full access.
-    soc    — SOC role, password-less login. Read-mostly.
+Sessions live in Redis under ``abusecve:session:<token>`` with a 12-hour
+TTL. The session JSON now carries ``{id, username, full_name, role}``
+so downstream code (webhooks, audit log) can attribute actions without
+re-hitting the DB.
 
-The admin password is sourced from the ``ABUSECVE_ADMIN_PASSWORD``
-environment variable (default ``changeme`` for local dev).
-
-Session storage is Redis-backed so that multiple uvicorn workers share
-the same session state. The keys live under ``abusecve:session:<token>``
-with a 12-hour TTL, and admin toggles under ``abusecve:toggles``.
-
-SOC restrictions (enforced centrally by the middleware helper):
+SOC restrictions (enforced centrally by middleware in ``main.py``):
     • DELETE on knowledge articles
-    • Writes to filter rules (create / refine / delete)
+    • Writes to filter rules (create / refine / delete / edit)
     • All webhook / integration management
     • Admin toggle mutation
 """
@@ -24,35 +21,36 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 import redis
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select, update as sql_update
 
 from app.config import settings
+from app.database import async_session
+from app.models.user import User
+from app.services.audit_service import audit, audit_actions
+from app.services.password import verify_password
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 # ── Config ─────────────────────────────────────
-ADMIN_USERNAME = "admin"
-SOC_USERNAME = "soc"
-ADMIN_PASSWORD = os.environ.get("ABUSECVE_ADMIN_PASSWORD", "changeme")
 SESSION_TTL_SECONDS = int(timedelta(hours=12).total_seconds())
-
 SESSION_KEY_PREFIX = "abusecve:session:"
 TOGGLES_KEY = "abusecve:toggles"
 
-# ── Redis client (sync — used only inside route handlers / middleware) ──
-# A sync client is fine here because sessions are read once per request
-# and the payload is a single ~100-byte string. Using the async client
-# would require awaiting inside the middleware and would offer no
-# measurable benefit at this traffic level.
+# Sentinel value the migration writes for the legacy ``soc`` row.
+# verify_password() can never match it (passlib rejects "!" as malformed),
+# so the only way ``soc`` logs in is via the legacy passwordless branch.
+LEGACY_SOC_HASH_MARKER = "!"
+
+# ── Redis client ───────────────────────────────
 _redis = redis.Redis.from_url(
     settings.redis_url,
     decode_responses=True,
@@ -61,12 +59,6 @@ _redis = redis.Redis.from_url(
 )
 
 # Default toggle state — seeded on first boot if Redis has no record.
-#
-# Two categories:
-#   • SOC visibility      — which sidebar surfaces SOC sees at all
-#   • SOC privileged ops  — which write actions SOC is allowed to perform
-#                            (default OFF — admins grant them explicitly
-#                            via the Access Control page)
 DEFAULT_TOGGLES: Dict[str, bool] = {
     # Visibility (true = SOC can see the page)
     "dashboard": True,
@@ -88,7 +80,6 @@ DEFAULT_TOGGLES: Dict[str, bool] = {
 
 
 def _ensure_toggles_seeded() -> None:
-    """Populate the toggles hash on first use so reads never see None."""
     try:
         if not _redis.exists(TOGGLES_KEY):
             _redis.hset(
@@ -121,12 +112,22 @@ class ToggleRequest(BaseModel):
     enabled: bool
 
 
-def _issue_token(user: dict) -> str:
+def _session_payload(user: User) -> dict:
+    """Shape stored in Redis — kept minimal, no password fields ever."""
+    return {
+        "id":        user.id,
+        "username":  user.username,
+        "full_name": user.full_name,
+        "role":      user.role,
+    }
+
+
+def _issue_token(payload: dict) -> str:
     token = secrets.token_urlsafe(32)
     _redis.setex(
         f"{SESSION_KEY_PREFIX}{token}",
         SESSION_TTL_SECONDS,
-        json.dumps(user),
+        json.dumps(payload),
     )
     return token
 
@@ -154,7 +155,6 @@ def resolve_user(request: Request) -> Optional[dict]:
 
 
 def require_admin(request: Request) -> dict:
-    """Raise 403 unless the caller is an ADMIN."""
     user = resolve_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -171,36 +171,74 @@ def require_auth(request: Request) -> dict:
 
 
 @router.post("/login")
-async def login(data: LoginRequest):
-    """Authenticate a user and return a bearer token.
+async def login(data: LoginRequest, request: Request):
+    """Authenticate against the ``users`` table.
 
-    admin → requires ``ABUSECVE_ADMIN_PASSWORD``
-    soc   → no password required
+    Login rules:
+        - Unknown / inactive username → 401.
+        - Legacy ``soc`` account (``password_hash == "!"``) accepts any
+          password (including empty) — this preserves pre-DB behaviour.
+        - Every other account requires the correct bcrypt password.
     """
     uname = (data.username or "").strip().lower()
+    if not uname:
+        raise HTTPException(status_code=400, detail="Username required")
 
-    if uname == ADMIN_USERNAME:
-        if not data.password or data.password != ADMIN_PASSWORD:
-            raise HTTPException(status_code=401, detail="Invalid admin password")
-        user = {"username": "admin", "role": "ADMIN"}
-    elif uname == SOC_USERNAME:
-        user = {"username": "soc", "role": "SOC"}
-    else:
-        raise HTTPException(status_code=401, detail="Unknown user")
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.username == uname))
+        user: Optional[User] = result.scalar_one_or_none()
 
-    token = _issue_token(user)
-    logger.info(f"Auth: {user['username']} signed in")
-    return {"token": token, "user": user}
+        if not user or not user.is_active:
+            logger.info(f"Auth: failed login for '{uname}' (unknown/inactive)")
+            await audit(
+                action=audit_actions.LOGIN_FAILURE,
+                metadata={"username": uname, "reason": "unknown_or_inactive"},
+                request=request,
+            )
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        is_legacy_soc = user.password_hash == LEGACY_SOC_HASH_MARKER
+        password_ok = is_legacy_soc or verify_password(data.password or "", user.password_hash)
+
+        if not password_ok:
+            logger.info(f"Auth: failed login for '{uname}' (bad password)")
+            await audit(
+                action=audit_actions.LOGIN_FAILURE,
+                metadata={"username": uname, "reason": "bad_password"},
+                request=request,
+            )
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Stamp last_login_at so admins can see stale accounts.
+        await session.execute(
+            sql_update(User).where(User.id == user.id).values(last_login_at=datetime.utcnow())
+        )
+        await session.commit()
+
+        payload = _session_payload(user)
+
+    token = _issue_token(payload)
+    logger.info(f"Auth: {payload['username']} signed in (role={payload['role']})")
+    await audit(
+        action=audit_actions.LOGIN_SUCCESS,
+        actor=payload,
+        metadata={"legacy_soc": is_legacy_soc},
+        request=request,
+    )
+    return {"token": token, "user": payload}
 
 
 @router.post("/logout")
 async def logout(request: Request):
+    user = resolve_user(request)
     token = request.headers.get("x-auth-token") or request.headers.get("X-Auth-Token")
     if token:
         try:
             _redis.delete(f"{SESSION_KEY_PREFIX}{token}")
         except redis.RedisError:
             pass
+    if user:
+        await audit(action=audit_actions.LOGOUT, actor=user, request=request)
     return {"status": "ok"}
 
 
@@ -214,7 +252,6 @@ async def me(request: Request):
 
 @router.get("/toggles")
 async def list_toggles(request: Request):
-    """Return the admin toggle map. Any authenticated user may read this."""
     user = resolve_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -223,12 +260,19 @@ async def list_toggles(request: Request):
 
 @router.post("/toggles")
 async def set_toggle(data: ToggleRequest, request: Request):
-    """Admin-only endpoint for enabling/disabling suite components for SOC."""
-    require_admin(request)
+    admin = require_admin(request)
     try:
         _ensure_toggles_seeded()
         _redis.hset(TOGGLES_KEY, data.component, "1" if data.enabled else "0")
     except redis.RedisError as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
     logger.info(f"Admin toggle: {data.component} -> {data.enabled}")
+    await audit(
+        action=audit_actions.TOGGLE_CHANGE,
+        actor=admin,
+        target_type="toggle",
+        target_id=data.component,
+        metadata={"enabled": data.enabled},
+        request=request,
+    )
     return {"status": "ok", "toggles": _load_toggles()}
