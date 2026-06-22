@@ -46,7 +46,19 @@ def upgrade() -> None:
 
     # ── Seed rows ─────────────────────────────────
     pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    admin_pw = os.environ.get("ABUSECVE_ADMIN_PASSWORD", "changeme")
+    admin_pw_raw = os.environ.get("ABUSECVE_ADMIN_PASSWORD", "changeme")
+    # bcrypt has a 72-byte hard limit; truncate without splitting a
+    # multibyte char. Matches app.services.password._truncate_for_bcrypt
+    # so runtime verification accepts the same input.
+    admin_pw_bytes = admin_pw_raw.encode("utf-8")[:72]
+    while admin_pw_bytes:
+        try:
+            admin_pw = admin_pw_bytes.decode("utf-8")
+            break
+        except UnicodeDecodeError:
+            admin_pw_bytes = admin_pw_bytes[:-1]
+    else:
+        admin_pw = "changeme"
     admin_hash = pwd_ctx.hash(admin_pw)
 
     users = sa.table(
