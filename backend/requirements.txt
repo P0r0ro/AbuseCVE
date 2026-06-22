@@ -29,7 +29,12 @@ python-dotenv==1.0.1
 # Utils
 python-dateutil==2.9.0
 markdown==3.7
-passlib[bcrypt]==1.7.4
+# bcrypt is pinned below 4.0 because passlib 1.7.4 (last release) can't
+# talk to bcrypt 4.x — passlib's own self-test (detect_wrap_bug) uses a
+# hardcoded 255-byte string and bcrypt 4.x refuses inputs >72 bytes,
+# which crashes passlib during init. 3.2.2 is the last 3.x release.
+passlib==1.7.4
+bcrypt==3.2.2
 
 # Excel export
 openpyxl==3.1.5
