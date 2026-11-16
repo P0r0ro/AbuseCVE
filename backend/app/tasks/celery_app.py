@@ -16,6 +16,11 @@ from celery.schedules import crontab
 
 from app.config import settings
 
+# Register the users table in the worker's SQLAlchemy metadata. alert_logs and
+# audit_log have FKs to users.id; without this import the worker never loads
+# the User model and every flush fails with NoReferencedTableError.
+import app.models.user  # noqa: F401,E402
+
 logger = logging.getLogger(__name__)
 
 celery_app = Celery(

@@ -12,6 +12,9 @@ psycopg2-binary==2.9.10
 # Celery
 celery[redis]==5.4.0
 redis==5.2.1
+# newer kombu (pulled in unpinned by celery) imports `packaging` in its redis
+# transport without it always being installed — worker dies at startup otherwise
+packaging==24.2
 
 # HTTP
 httpx==0.28.1
