@@ -12,8 +12,10 @@ psycopg2-binary==2.9.10
 # Celery
 celery[redis]==5.4.0
 redis==5.2.1
-# newer kombu (pulled in unpinned by celery) imports `packaging` in its redis
-# transport without it always being installed — worker dies at startup otherwise
+# Pin kombu: celery 5.4.0 allows any kombu <6, and newer kombu releases need
+# redis-py >= 6.1 and `packaging`, so an unpinned rebuild crashes the worker.
+# 5.4.2 is compatible with celery 5.4.0 and redis 5.2.1.
+kombu==5.4.2
 packaging==24.2
 
 # HTTP
