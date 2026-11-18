@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -43,6 +43,17 @@ class NormalizedCVE:
     def __post_init__(self):
         if self.source and self.source not in self.sources:
             self.sources.append(self.source)
+        # DB columns are naive DateTime (UTC). Some feeds (Red Hat, MITRE)
+        # return "...Z" timestamps that parse as tz-aware; asyncpg rejects
+        # those for naive columns and dedup comparisons would raise too.
+        self.published_date = _to_naive_utc(self.published_date)
+        self.modified_date = _to_naive_utc(self.modified_date)
+
+
+def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is not None and dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 class BaseCVESource(ABC):
